@@ -19,14 +19,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if session == None and self.curAppName is not None:
             ui.message(_("Application {curApp} has no open audio sessions.".format(curApp=self.curAppName)))
             return
-        volume.SetMasterVolume(volume.GetMasterVolume() + 0.1, None)
+        volume.SetMasterVolume(volume.GetMasterVolume() + 0.025, None)
 
     def script_volumeDown(self, gesture):
         session,volume = self.findSessionByName(self.curAppName)
         if session == None and self.curAppName is not None:
             ui.message(_("Application {curApp} has no open audio sessions.".format(curApp=self.curAppName)))
             return
-        volume.SetMasterVolume(volume.GetMasterVolume() - 0.1, None)
+        volume.SetMasterVolume(volume.GetMasterVolume() - 0.025, None)
 
     def script_nextApp(self, gesture):
         audioSessions = AudioUtilities.GetAllSessions()
