@@ -66,7 +66,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             newSession = sessions[0]
         self.curAppName = newSession.Process.name()
         ui.message(self.curAppName)
-    
+
     def script_soundManager(self, gesture):
         self.enabled = not self.enabled
         if self.enabled is True:
@@ -74,7 +74,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self.bindGesture("kb:uparrow", "volumeUp")
             self.bindGesture("kb:downarrow", "volumeDown")
             self.bindGesture("kb:leftarrow", "previousApp")
-            self.bindGesture("kb:rightarrow", "nextApp")            
+            self.bindGesture("kb:rightarrow", "nextApp")
         else:
             tones.beep(660, 100)
             tones.beep(440, 100)
@@ -88,8 +88,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 volume = session.SimpleAudioVolume
                 return session,volume
         return None,None
-    
+
     __gestures = {
         "kb:nvda+v": "soundManager",
     }
-    
+
