@@ -2,6 +2,7 @@
 
 
 import globalPluginHandler
+import tones
 import ui
 import sys, os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -17,14 +18,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def script_volumeUp(self, gesture):
         session,volume = self.findSessionByName(self.curAppName)
         if session == None and self.curAppName is not None:
-            ui.message(_("Application {curApp} has no open audio sessions.".format(curApp=self.curAppName)))
+            tones.beep(200, 500)
             return
         volume.SetMasterVolume(volume.GetMasterVolume() + 0.025, None)
 
     def script_volumeDown(self, gesture):
         session,volume = self.findSessionByName(self.curAppName)
         if session == None and self.curAppName is not None:
-            ui.message(_("Application {curApp} has no open audio sessions.".format(curApp=self.curAppName)))
+            tones.beep(200, 500)
             return
         volume.SetMasterVolume(volume.GetMasterVolume() - 0.025, None)
 
@@ -69,13 +70,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def script_soundManager(self, gesture):
         self.enabled = not self.enabled
         if self.enabled is True:
-            ui.message(_("Adjust volume"))
+            tones.beep((440, 100), (660, 100))
             self.bindGesture("kb:uparrow", "volumeUp")
             self.bindGesture("kb:downarrow", "volumeDown")
             self.bindGesture("kb:leftarrow", "previousApp")
             self.bindGesture("kb:rightarrow", "nextApp")            
         else:
-            ui.message(_("Adjust volume done"))
+            tones.beep(660, 100)
+            tones.beep(440, 100)
             self.clearGestureBindings()
             self.bindGestures(self.__gestures)
 
