@@ -26,7 +26,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			name = session.Process.name().replace(".exe", "")
 		ui.message(name)
 
-		def script_muteApp(self, gesture):
+	def script_muteApp(self, gesture):
 		session,volume = self.findSessionByName(self.curAppName)
 		if session == None and self.curAppName is not None:
 			tones.beep(200, 500)
