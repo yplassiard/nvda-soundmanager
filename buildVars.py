@@ -17,9 +17,9 @@ addon_info = {
 	"addon_summary" : _("Sound Manager"),
 	# Add-on description
 	# Translators: Long description to be shown for this add-on on add-on information from add-ons manager
-    "addon_description" : _("""Manages Windows and applications volumes directly within NVDA"""),
+	"addon_description" : _("""Manages Windows and applications volumes directly within NVDA"""),
 	# version
-    "addon_version" : "2019.05.2",
+	"addon_version" : "2019.05.2",
 	# Author(s)
 	"addon_author" : u"Yannick PLASSIARD <podcastcecitek@gmail.com>",
 	# URL for the add-on documentation support
