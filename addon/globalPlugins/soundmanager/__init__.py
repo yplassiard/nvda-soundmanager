@@ -11,7 +11,7 @@ from pycaw.pycaw import AudioUtilities
 del sys.path[-1]
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
-        scriptCategory = _("Sound Manager")
+    scriptCategory = _("Sound Manager")
 	enabled = False
 	curAppName = None
 
@@ -26,12 +26,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			name = session.Process.name().replace(".exe", "")
 		ui.message(name)
 
-        def script_muteApp(self, gesture):
+		def script_muteApp(self, gesture):
 		session,volume = self.findSessionByName(self.curAppName)
 		if session == None and self.curAppName is not None:
 			tones.beep(200, 500)
 			return
-                volume.SetMute(not volume.GetMute(), None)
+				volume.SetMute(not volume.GetMute(), None)
 
 
 
@@ -95,14 +95,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self.bindGesture("kb:downarrow", "volumeDown")
 			self.bindGesture("kb:leftarrow", "previousApp")
 			self.bindGesture("kb:rightarrow", "nextApp")
-                        self.bindGesture("kb:m", "muteApp")
+						self.bindGesture("kb:m", "muteApp")
 		else:
 			tones.beep(440, 100)
 			self.clearGestureBindings()
 			self.bindGestures(self.__gestures)
 
 	script_soundManager.__doc__ = _("""Toggle volume control adjustment on or off""")
-        
+
 	def findSessionByName(self, name):
 		sessions = AudioUtilities.GetAllSessions()
 		for session in sessions:
