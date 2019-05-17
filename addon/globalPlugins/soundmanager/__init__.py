@@ -1,4 +1,4 @@
-# *-* coding: utf8 *-*
+# *-* coding: utf-8 *-*
 
 
 import globalPluginHandler
@@ -11,6 +11,7 @@ from pycaw.pycaw import AudioUtilities
 del sys.path[-1]
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+        scriptCategory = _("Sound Manager")
 	enabled = False
 	curAppName = None
 
@@ -90,6 +91,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self.clearGestureBindings()
 			self.bindGestures(self.__gestures)
 
+        script_soundManager.__doc__ = _("""Toggle volume control adjustment on or off""")
 	def findSessionByName(self, name):
 		sessions = AudioUtilities.GetAllSessions()
 		for session in sessions:

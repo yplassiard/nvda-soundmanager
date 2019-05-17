@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: soundmanager 2019.05.1\n"
 "Report-Msgid-Bugs-To: nvda-translations@freelists.org\n"
-"POT-Creation-Date: 2019-05-17 10:10+0200\n"
+"POT-Creation-Date: 2019-05-17 14:33+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: Yannick Plassiard <podcastcecitek@gmail.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,9 +19,13 @@ msgstr ""
 
 #. Add-on summary, usually the user visible name of the addon.
 #. Translators: Summary for this add-on to be shown on installation and add-on information.
-#: buildVars.py:17
+#: addon/globalPlugins/soundmanager/__init__.py:14 buildVars.py:17
 msgid "Sound Manager"
 msgstr "Sound Manager"
+
+#: addon/globalPlugins/soundmanager/__init__.py:94
+msgid "Toggle volume control adjustment on or off"
+msgstr "Activer/désactiver l'ajustement du volume des applications"
 
 #. Add-on description
 #. Translators: Long description to be shown for this add-on on add-on information from add-ons manager
