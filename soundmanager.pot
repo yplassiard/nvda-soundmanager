@@ -1,5 +1,5 @@
-# SoundManager
-# Copyright (C) 2019 Yannick Plassiard
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the soundmanager package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
 #
@@ -10,9 +10,9 @@ msgstr ""
 "Report-Msgid-Bugs-To: nvda-translations@freelists.org\n"
 "POT-Creation-Date: 2019-05-17 10:10+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
-"Last-Translator: Yannick Plassiard <podcastcecitek@gmail.com>\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
-"Language: fr_FR\n"
+"Language: \n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=CHARSET\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -21,10 +21,10 @@ msgstr ""
 #. Translators: Summary for this add-on to be shown on installation and add-on information.
 #: buildVars.py:17
 msgid "Sound Manager"
-msgstr "Sound Manager"
+msgstr ""
 
 #. Add-on description
 #. Translators: Long description to be shown for this add-on on add-on information from add-ons manager
 #: buildVars.py:20
 msgid "Manages Windows and applications volumes directly within NVDA"
-msgstr "Ajuster le volume des applications directement depuis NVDA"
+msgstr ""

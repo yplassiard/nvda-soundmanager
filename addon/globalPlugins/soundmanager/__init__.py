@@ -15,6 +15,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     curAppName = None
 
 
+    def sayFocusedApp(self, session):
+        name = None
+        try:
+            name = session.getDisplayName()
+        except:
+            pass
+        if name is None:
+            name = session.Process.name().replace(".exe", "")
+        ui.message(name)
+
     def script_volumeUp(self, gesture):
         session,volume = self.findSessionByName(self.curAppName)
         if session == None and self.curAppName is not None:
@@ -46,7 +56,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if newSession == None:
             newSession = sessions[0]
         self.curAppName = newSession.Process.name()
-        ui.message(self.curAppName)
+        self.sayFocusedApp(newSession)
 
     def script_previousApp(self, gesture):
         audioSessions = AudioUtilities.GetAllSessions()
@@ -65,18 +75,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         if newSession == None:
             newSession = sessions[0]
         self.curAppName = newSession.Process.name()
-        ui.message(self.curAppName)
+        self.sayFocusedApp(newSession)
 
     def script_soundManager(self, gesture):
         self.enabled = not self.enabled
         if self.enabled is True:
-            tones.beep((440, 100), (660, 100))
+            tones.beep(660, 100)
             self.bindGesture("kb:uparrow", "volumeUp")
             self.bindGesture("kb:downarrow", "volumeDown")
             self.bindGesture("kb:leftarrow", "previousApp")
             self.bindGesture("kb:rightarrow", "nextApp")
         else:
-            tones.beep(660, 100)
             tones.beep(440, 100)
             self.clearGestureBindings()
             self.bindGestures(self.__gestures)
