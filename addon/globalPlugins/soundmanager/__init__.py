@@ -31,7 +31,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if session == None and self.curAppName is not None:
 			tones.beep(200, 500)
 			return
-				volume.SetMute(not volume.GetMute(), None)
+		volume.SetMute(not volume.GetMute(), None)
 
 
 
