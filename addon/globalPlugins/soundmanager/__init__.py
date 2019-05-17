@@ -95,7 +95,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self.bindGesture("kb:downarrow", "volumeDown")
 			self.bindGesture("kb:leftarrow", "previousApp")
 			self.bindGesture("kb:rightarrow", "nextApp")
-						self.bindGesture("kb:m", "muteApp")
+			self.bindGesture("kb:m", "muteApp")
 		else:
 			tones.beep(440, 100)
 			self.clearGestureBindings()
