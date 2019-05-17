@@ -11,7 +11,7 @@ from pycaw.pycaw import AudioUtilities
 del sys.path[-1]
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
-    scriptCategory = _("Sound Manager")
+	scriptCategory = _("Sound Manager")
 	enabled = False
 	curAppName = None
 
