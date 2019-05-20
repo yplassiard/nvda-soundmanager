@@ -4,6 +4,9 @@
 #Copyright (C) 2018 Yannick PLASSIARD
 #This file is covered by the GNU General Public License.
 #See the file LICENSE for more details.
+#
+#This addon uses the following dependencies:
+# pycaw - see the pycaw.LICENSE file for more details.
 
 import globalPluginHandler
 import tones
@@ -20,7 +23,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
   enabled = False
   curAppName = None
 
-  
+
   def getAppNameFromSession(self, session):
     name = None
     try:
@@ -29,87 +32,87 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
       name = session.Process.name().replace(".exe", "")
     return name
 
-  
+
   def script_muteApp(self, gesture):
-    session,volume = self.findSessionByName(self.curAppName)
-    if session == None and self.curAppName is not None:
-      ui.message(_("Unable to retrieve current application."))
-      return
-    muted = volume.GetMute()
-    volume.SetMute(not muted, None)
-    if muted:
-      ui.message(_("{app} muted").format(app=self.getAppNameFromSession(session)))
-    else:
-      ui.message(_("{app} unmuted").format(app=self.getAppNameFromSession(session)))
+	session,volume = self.findSessionByName(self.curAppName)
+	if session == None and self.curAppName is not None:
+	  ui.message(_("Unable to retrieve current application."))
+	  return
+	muted = volume.GetMute()
+	volume.SetMute(not muted, None)
+	if muted:
+	  ui.message(_("{app} muted").format(app=self.getAppNameFromSession(session)))
+	else:
+	  ui.message(_("{app} unmuted").format(app=self.getAppNameFromSession(session)))
 
   def script_volumeUp(self, gesture):
-    self.changeVolume(self.volumeChangeStep)
+	self.changeVolume(self.volumeChangeStep)
   def script_volumeDown(self, gesture):
-    self.changeVolume(-self.volumeChangeStep)
+	self.changeVolume(-self.volumeChangeStep)
   def changeVolume(self, volumeStep):
-    session,volume = self.findSessionByName(self.curAppName)
-    if session == None and self.curAppName is not None:
-      ui.message(_("Unable to retrieve current application."))
-      return
-    newVolume = volume.GetMasterVolume() + volumeStep
-    if volumeStep > 0 and newVolume > 1:
-      newVolume = 1.0
-    elif volumeStep < 0 and newVolume < 0:
-      newVolume = 0.0
-      
-    volume.SetMasterVolume(newVolume, None)
-    ui.message(_("{volume}%".format(volume=int(round(newVolume * 100)))))
-    
+	session,volume = self.findSessionByName(self.curAppName)
+	if session == None and self.curAppName is not None:
+	  ui.message(_("Unable to retrieve current application."))
+	  return
+	newVolume = volume.GetMasterVolume() + volumeStep
+	if volumeStep > 0 and newVolume > 1:
+	  newVolume = 1.0
+	elif volumeStep < 0 and newVolume < 0:
+	  newVolume = 0.0
+
+	volume.SetMasterVolume(newVolume, None)
+	ui.message(_("{volume}%".format(volume=int(round(newVolume * 100)))))
+
   def cycleThroughApps(self, goForward):
-    audioSessions = AudioUtilities.GetAllSessions()
-    sessions = []
-    for session in audioSessions:
-      if session.Process is not None:
+	audioSessions = AudioUtilities.GetAllSessions()
+	sessions = []
+	for session in audioSessions:
+	  if session.Process is not None:
 	sessions.append(session)
-    newSession = None
-    idx = 0
-    nrSessions = len(sessions)
-    while idx < nrSessions:
-      session = sessions[idx]
-      if self.curAppName == session.Process.name():
+	newSession = None
+	idx = 0
+	nrSessions = len(sessions)
+	while idx < nrSessions:
+	  session = sessions[idx]
+	  if self.curAppName == session.Process.name():
 	if goForward:
-          newSession = sessions[idx + 1] if idx + 1 < nrSessions else sessions[0]
-        else:
-          newSession = sessions[idx - 1]
-      idx += 1
-    if newSession is None:
-      newSession = sessions[0]
-    self.curAppName = newSession.Process.name()
-    ui.message(self.getAppNameFromSession(newSession))
+		  newSession = sessions[idx + 1] if idx + 1 < nrSessions else sessions[0]
+		else:
+		  newSession = sessions[idx - 1]
+	  idx += 1
+	if newSession is None:
+	  newSession = sessions[0]
+	self.curAppName = newSession.Process.name()
+	ui.message(self.getAppNameFromSession(newSession))
   def script_nextApp(self, gesture):
-    self.cycleThroughApps(True)
+	self.cycleThroughApps(True)
   def script_previousApp(self, gesture):
-    self.cycleThroughApps(False)
+	self.cycleThroughApps(False)
   def script_soundManager(self, gesture):
-    self.enabled = not self.enabled
-    if self.enabled is True:
-      tones.beep(660, 100)
-      self.bindGesture("kb:uparrow", "volumeUp")
-      self.bindGesture("kb:downarrow", "volumeDown")
-      self.bindGesture("kb:leftarrow", "previousApp")
-      self.bindGesture("kb:rightarrow", "nextApp")
-      self.bindGesture("kb:m", "muteApp")
-    else:
-      tones.beep(440, 100)
-      self.clearGestureBindings()
-      self.bindGestures(self.__gestures)
-      
+	self.enabled = not self.enabled
+	if self.enabled is True:
+	  tones.beep(660, 100)
+	  self.bindGesture("kb:uparrow", "volumeUp")
+	  self.bindGesture("kb:downarrow", "volumeDown")
+	  self.bindGesture("kb:leftarrow", "previousApp")
+	  self.bindGesture("kb:rightarrow", "nextApp")
+	  self.bindGesture("kb:m", "muteApp")
+	else:
+	  tones.beep(440, 100)
+	  self.clearGestureBindings()
+	  self.bindGestures(self.__gestures)
+
   script_soundManager.__doc__ = _("""Toggle volume control adjustment on or off""")
 
   def findSessionByName(self, name):
-    sessions = AudioUtilities.GetAllSessions()
-    for session in sessions:
-      if session.Process and session.Process.name() == name or name is None:
+	sessions = AudioUtilities.GetAllSessions()
+	for session in sessions:
+	  if session.Process and session.Process.name() == name or name is None:
 	volume = session.SimpleAudioVolume
 	return session,volume
-    return None,None
-    
+	return None,None
+
   __gestures = {
-    "kb:nvda+shift+v": "soundManager",
+	"kb:nvda+shift+v": "soundManager",
   }
-  
+
