@@ -1,43 +1,71 @@
+# SoundManager French locale
+# Copyright (C) 2019 Yannick Plassiard
+# This file is distributed under the same license as the soundmanager package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: soundmanager 2019.05.4\n"
+"Report-Msgid-Bugs-To: nvda-translations@freelists.org\n"
+"POT-Creation-Date: 2019-05-23 09:32+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: fr_FR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
 #. . Translators: The name of the add-on presented to the user.
 #. Add-on summary, usually the user visible name of the addon.
 #. Translators: Summary for this add-on to be shown on installation and add-on information.
-#: addon/globalPlugins/soundmanager/__init__.py:30 buildVars.py:17
+#: addon/globalPlugins/soundmanager/__init__.py:40 buildVars.py:17
 msgid "Sound Manager"
 msgstr "Sound Manager"
 
+#: addon/globalPlugins/soundmanager/__init__.py:53
+msgid "Master volume"
+msgstr "Volume principal"
+
 #. . Translators: Spoken message when unablee to change audio volume for the given application.
 #. . Translators: Spoken message when unablee to change audio volume for the given application
-#: addon/globalPlugins/soundmanager/__init__.py:53
-#: addon/globalPlugins/soundmanager/__init__.py:113
+#: addon/globalPlugins/soundmanager/__init__.py:77
+#: addon/globalPlugins/soundmanager/__init__.py:145
 msgid "Unable to retrieve current application."
-msgstr "Impossible de déterminer l'appliaction en avant-plan."
+msgstr "Impossible de déterminer l'application en avant-plan."
+
+#. . Translators: Cannot mute the master volume.
+#: addon/globalPlugins/soundmanager/__init__.py:81
+msgid "Cannot mute the master volume."
+msgstr "Impossible de couper le volume principal."
 
 #. . Translator: Spoken message indicating that the app's sound is now muted.
-#: addon/globalPlugins/soundmanager/__init__.py:59
+#: addon/globalPlugins/soundmanager/__init__.py:88
 #, python-brace-format
 msgid "{app} muted"
 msgstr "{app} muette"
 
 #. . Translators: Spoken message indicating that the app's audio is now unmuted.
-#: addon/globalPlugins/soundmanager/__init__.py:62
+#: addon/globalPlugins/soundmanager/__init__.py:91
 #, python-brace-format
 msgid "{app} unmuted"
 msgstr "{app} non muette"
 
 #. . Translators: The current application does not pay audio.
-#: addon/globalPlugins/soundmanager/__init__.py:79
+#: addon/globalPlugins/soundmanager/__init__.py:110
 #, python-brace-format
 msgid "{app} is not playing any sound."
 msgstr "L'application {app} ne joue aucun son."
 
 #. . Translators: Message indicating the volume's percentage ("95%").
-#: addon/globalPlugins/soundmanager/__init__.py:123
+#: addon/globalPlugins/soundmanager/__init__.py:155
 #, python-brace-format
 msgid "{volume}%"
 msgstr "{volume} %"
 
 #. . Translators: Main script help message.
-#: addon/globalPlugins/soundmanager/__init__.py:181
+#: addon/globalPlugins/soundmanager/__init__.py:220
 msgid "Toggle volume control adjustment on or off"
 msgstr "Active^désactive le contrôle du volume."
 

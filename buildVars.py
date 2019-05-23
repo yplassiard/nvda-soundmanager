@@ -21,7 +21,7 @@ addon_info = {
 	# version
 	"addon_version" : "2019.05.5",
 	# Author(s)
-	"addon_author" : u"Yannick PLASSIARD <podcastcecitek@gmail.com>",
+	"addon_author" : u"Yannick PLASSIARD <podcastcecitek@gmail.com>, Danstiv <danstiv@blind.games>, Beqa Gozalishvili <beqaprogger@gmail.com>",
 	# URL for the add-on documentation support
 	"addon_url" : None,
 	# Documentation file name

@@ -10,6 +10,10 @@
 
 # System modules
 import sys, os
+# Windows Specific
+from comtypes import CLSCTX_ALL
+from ctypes import POINTER, cast
+
 
 # NVDA core requirements
 import globalPluginHandler
@@ -21,9 +25,15 @@ import ui
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from . import pycaw
-from pycaw.pycaw import AudioUtilities
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 del sys.path[-1]
 addonHandler.initTranslation()
+
+class MasterVolumeFakeProcess(object):
+	def __init__(self, name):
+		self._name = name
+	def name(self):
+		return self._name
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	#. Translators: The name of the add-on presented to the user.
@@ -33,11 +43,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	curAppName = None
 
 
+	def __init__(self, *args, **kwargs):
+		super(globalPluginHandler.GlobalPlugin, self).__init__(*args, **kwargs)
+		self.devices = AudioUtilities.GetSpeakers()
+		self.interface = self.devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+		self.master_volume = cast(self.interface, POINTER(IAudioEndpointVolume))
+		self.master_volume.SetMasterVolume = self.master_volume.SetMasterVolumeLevelScalar
+		self.master_volume.GetMasterVolume = self.master_volume.GetMasterVolumeLevelScalar
+		self.master_volume.name = _('Master volume')
+		self.master_volume.Process = MasterVolumeFakeProcess(self.master_volume.name)
+		self.master_volume.getDisplayName = lambda: self.master_volume.name
+
 
 	def getAppNameFromSession(self, session):
 		"""Returns an application's name formatted to be presented to the user from a given audio session."""
 
 		name = None
+		if session is None:
+			return self.master_volume.name
 		try:
 			name = session.getDisplayName()
 		except Exception as e:
@@ -48,10 +71,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def script_muteApp(self, gesture):
 		"""Mutes or unmute the focused application."""
 		session,volume = self.findSessionByName(self.curAppName)
-		if session == None and self.curAppName is not None:
-			#. Translators: Spoken message when unablee to change audio volume for the given application.
-			ui.message(_("Unable to retrieve current application."))
-			return
+		if session is None:
+			if self.curAppName is not None:
+				#. Translators: Spoken message when unablee to change audio volume for the given application.
+				ui.message(_("Unable to retrieve current application."))
+				return
+			else:
+				#. Translators: Cannot mute the master volume.
+				ui.message(_("Cannot mute the master volume."))
+				return
+
 		muted = volume.GetMute()
 		volume.SetMute(not muted, None)
 		if not muted:
@@ -61,7 +90,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			#. Translators: Spoken message indicating that the app's audio is now unmuted.
 			ui.message(_("{app} unmuted").format(app=self.getAppNameFromSession(session)))
 
-	def focusCurrentApplication(self):
+	def focusCurrentApplication(self, silent=False):
 		"""Selects the audio control for the current alsplication."""
 		obj = api.getFocusObject()
 		appName = None
@@ -70,13 +99,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except AttributeError:
 			appName = None
 		if appName is None:
-			#. Translators: Unable to determine focused application's name.
-			ui.message_("Unable to retrieve current application's name.")
+			if not silent:
+				#. Translators: Unable to determine focused application's name.
+				ui.message_("Unable to retrieve current application's name.")
 			return False
 		session,volume = self.findSessionByName(appName)
 		if session is None:
-			#. Translators: The current application does not pay audio.
-			ui.message(_("{app} is not playing any sound.".format(app=appName)))
+			if not silent:
+				#. Translators: The current application does not pay audio.
+				ui.message(_("{app} is not playing any sound.".format(app=appName)))
 			return False
 		self.curAppName = appName
 		return True
@@ -108,7 +139,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def changeVolume(self, volumeStep):
 		"""Adjusts the volume of the selected application using the given step value."""
 		session,volume = self.findSessionByName(self.curAppName)
-		if session == None and self.curAppName is not None:
+		selector = self.master_volume
+		if volume is None and self.curAppName is not None:
 			#. Translators: Spoken message when unablee to change audio volume for the given application
 			ui.message(_("Unable to retrieve current application."))
 			return
@@ -128,6 +160,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""
 		audioSessions = AudioUtilities.GetAllSessions()
 		sessions = []
+		sessions.append(self.master_volume)
 		for session in audioSessions:
 			if session.Process is not None:
 				sessions.append(session)
@@ -144,7 +177,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			idx += 1
 		if newSession is None:
 			newSession = sessions[0]
-		self.curAppName = newSession.Process.name()
+		self.curAppName = newSession.Process.name() if newSession.Process is not None else newSession.name
 		ui.message(self.getAppNameFromSession(newSession))
 
 	def script_nextApp(self, gesture):
@@ -164,6 +197,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.enabled = not self.enabled
 		if self.enabled is True:
 			tones.beep(660, 100)
+
+			# Next gesture is bound to disable the volume control mode by pressing escape.
+			self.bindGesture("kb:escape", "soundManager")
 			self.bindGesture("kb:control+uparrow", "curAppVolumeUp")
 			self.bindGesture("kb:control+downarrow", "curAppVolumeDown")
 			self.bindGesture("kb:control+m", "curAppMute")
@@ -172,6 +208,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			self.bindGesture("kb:leftarrow", "previousApp")
 			self.bindGesture("kb:rightarrow", "nextApp")
 			self.bindGesture("kb:m", "muteApp")
+			if not self.focusCurrentApplication(True):
+				self.curAppName = self.master_volume.name
+
 		else:
 			tones.beep(440, 100)
 			self.clearGestureBindings()
@@ -182,6 +221,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def findSessionByName(self, name):
 		"""Finds an audio session according to the process's name ("chrome.exe")."""
+		if name == self.master_volume.name:
+			return None,self.master_volume
 		sessions = AudioUtilities.GetAllSessions()
 		for session in sessions:
 			if session.Process is not None:
