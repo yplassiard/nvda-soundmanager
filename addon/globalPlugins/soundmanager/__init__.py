@@ -19,6 +19,7 @@ from ctypes import POINTER, cast
 import globalPluginHandler
 import addonHandler
 import api
+from speech import cancelSpeech
 import tones
 import ui
 # Local requirements (Pycaw and its dependencies)
@@ -136,6 +137,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""Decreases the volume of the selected application."""
 		self.changeVolume(-self.volumeChangeStep)
 
+	def script_volume_changed(self, gesture):
+		gesture.send()
+		cancelSpeech()
+		ui.message(str(int(round(round(self.master_volume.GetMasterVolume(), 2)*100, 0)))+'%')
+
 	def changeVolume(self, volumeStep):
 		"""Adjusts the volume of the selected application using the given step value."""
 		session,volume = self.findSessionByName(self.curAppName)
@@ -234,5 +240,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	__gestures = {
 		"kb:nvda+shift+v": "soundManager",
+"kb:volumeDown": "volume_changed",
+"kb:volumeUp": "volume_changed"
 	}
 
