@@ -14,3 +14,10 @@ When activated the following shortcuts can be used:
 - LeftArrow: Go to previous app that is playing audio
 - RightArrow: Go to next app that is playing audio
 - m: mute or unmute the focused app
+- control + Up arrow: raises the current application's volume.
+- control + Down arrow: lowers the current application's volume.
+
+## Settings
+A "Sound Manager" category within the NVDA Setting's dialog allows you to customize the addon behavior:
+- Announce volume changes: Instructs the add-on to say the new volume values when changing it.
+- Announce app change when cycling: Instructs the add-on to speak the application name when cycligng through app volumes.

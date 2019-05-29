@@ -17,3 +17,11 @@ Lorsque le contrôle du volume est activé les raccourcis suivants sont disponib
 - Flèche vers la gauche: Aller à l'application précédente jouant de l'audio.
 - Flèche vers la droite: Aller à l'application suivante jouant de l'audio.
 - m: Couper le son de l'application sélectionnée.
+- Contrôle + Fl\che vers le haut: augmenter le volume de l'application en avant-plan.
+- Contrôle + Flèche vers le bas: diminue le volume de l'application en avant-plan.
+
+## Paramétrage
+Dans le dialogue de paramétrage de NVDA, une catégorie "Sound Manager" permet de changer les paramètres suivants: 
+- Annoncer les changements de volume: Permet de vocaliser ou non les changements de volume des applications.
+- Annoncer le nom des apps lors de la sélection des contrôles de volume.
+
