@@ -2,7 +2,7 @@
 # Sound Manager
 #addon/globalPlugins/sound-manager/__init__.py
 #A part of the NVDA Sound Manager add-on
-#Copyright (C) 2019 Yannick PLASSIARD
+#Copyright (C) 2019 Yannick PLASSIARD, Danstiv, Beqa Gozalishvili
 #This file is covered by the GNU General Public License.
 #See the file LICENSE for more details.
 #

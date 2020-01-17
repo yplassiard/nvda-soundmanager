@@ -1,4 +1,12 @@
 # NVDA Sound Manager
+## Author
+- Yannick Plassiard
+- Danstiv
+- Beqa Gozalishvili
+
+## Download link
+https://github.com/yplassiard/nvda-soundmanager/releases/download/v2019.07/soundmanager-2019.07.nvda-addon
+
 ## Introduction
 This addon aims to provide more advanced sound functionalities within NVDA.
 ## Features
