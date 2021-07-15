@@ -17,9 +17,9 @@ addon_info = {
 	"addon_summary" : _("Sound Manager"),
 	# Add-on description
 	# Translators: Long description to be shown for this add-on on add-on information from add-ons manager
-	"addon_description" : _("""Manages Windows and applications volumes directly within NVDA"""),
+    "addon_description" : _("""Manages Windows and applications volumes directly within NVDA"""),
 	# version
-	"addon_version" : "2020.1",
+	"addon_version" : "2021.06",
 	# Author(s)
 	"addon_author" : u"Yannick PLASSIARD <podcastcecitek@gmail.com>, Danstiv <danstiv@blind.games>, Beqa Gozalishvili <beqaprogger@gmail.com>",
 	# URL for the add-on documentation support
@@ -29,7 +29,7 @@ addon_info = {
 	# Minimum NVDA version supported (e.g. "2018.3")
 	"addon_minimumNVDAVersion" : "2019.1",
 	# Last NVDA version supported/tested (e.g. "2018.4", ideally more recent than minimum version)
-	"addon_lastTestedNVDAVersion" : "2019.3",
+	"addon_lastTestedNVDAVersion" : "2021.1",
 	# Add-on update channel (default is stable or None)
 	"addon_updateChannel" : "stable"
 }
