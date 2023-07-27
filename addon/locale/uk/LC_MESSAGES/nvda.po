@@ -1,0 +1,86 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the 'soundmanager' package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: 'soundmanager' '2023.07.26'\n"
+"Report-Msgid-Bugs-To: 'nvda-translations@freelists.org'\n"
+"POT-Creation-Date: 2023-07-27 09:33+0300\n"
+"PO-Revision-Date: 2023-07-27 09:44+0300\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: uk_UA\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.3.2\n"
+
+#. Translators: The name of the add-on presented to the user.
+#. Translators: This is the label for the Sound manager settings panel.
+#. Add-on summary, usually the user visible name of the addon.
+#. Translators: Summary for this add-on to be shown on installation and add-on information.
+#: addon\globalPlugins\soundmanager\__init__.py:67
+#: addon\globalPlugins\soundmanager\__init__.py:278 buildVars.py:17
+msgid "Sound Manager"
+msgstr "Диспетчер звуку"
+
+#: addon\globalPlugins\soundmanager\__init__.py:81
+msgid "Master volume"
+msgstr "Майстер гучності"
+
+#. Translators: Spoken message when unablee to change audio volume for the given application.
+#. Translators: Spoken message when unablee to change audio volume for the given application
+#: addon\globalPlugins\soundmanager\__init__.py:124
+#: addon\globalPlugins\soundmanager\__init__.py:189
+msgid "Unable to retrieve current application."
+msgstr "Не вдається отримати поточний застосунок."
+
+#. Translators: Cannot mute the master volume.
+#: addon\globalPlugins\soundmanager\__init__.py:128
+msgid "Cannot mute the master volume."
+msgstr "Неможливо вимкнути звук для майстра гучності"
+
+#. Translator: Spoken message indicating that the app's sound is now muted.
+#: addon\globalPlugins\soundmanager\__init__.py:135
+#, python-brace-format
+msgid "{app} muted"
+msgstr "{app} звук вимкнено"
+
+#. Translators: Spoken message indicating that the app's audio is now unmuted.
+#: addon\globalPlugins\soundmanager\__init__.py:138
+#, python-brace-format
+msgid "{app} unmuted"
+msgstr "{app} звук увімкнено"
+
+#. Translators: The current application does not pay audio.
+#: addon\globalPlugins\soundmanager\__init__.py:151
+#, python-brace-format
+msgid "{app} is not playing any sound."
+msgstr "{app} не відтворює жодного звуку."
+
+#. Translators: Message indicating the volume's percentage ("95%").
+#: addon\globalPlugins\soundmanager\__init__.py:199
+#, python-brace-format
+msgid "{volume}%"
+msgstr "{volume}%"
+
+#. Translators: Main script help message.
+#: addon\globalPlugins\soundmanager\__init__.py:254
+msgid "Toggle volume control adjustment on or off"
+msgstr "Вмикає або вимикає регулювання гучності"
+
+#: addon\globalPlugins\soundmanager\__init__.py:282
+msgid "&announce volume changes"
+msgstr "Оголошувати зміни &рівня гучності"
+
+#: addon\globalPlugins\soundmanager\__init__.py:285
+msgid "Announce a&pp names when cycling"
+msgstr "Оголошувати імена &застосунків під час переміщення між ними"
+
+#. Add-on description
+#. Translators: Long description to be shown for this add-on on add-on information from add-ons manager
+#: buildVars.py:20
+msgid "Manages Windows and applications volumes directly within NVDA"
+msgstr "Керування гучністю Windows та застосунків безпосередньо із NVDA"
