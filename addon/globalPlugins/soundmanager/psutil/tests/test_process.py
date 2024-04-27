@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (c) 2009, Giampaolo Rodola'. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
@@ -13,15 +13,15 @@ import itertools
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
-import tempfile
 import textwrap
 import time
 import types
+import unittest
 
 import psutil
-
 from psutil import AIX
 from psutil import BSD
 from psutil import LINUX
@@ -33,16 +33,14 @@ from psutil import POSIX
 from psutil import SUNOS
 from psutil import WINDOWS
 from psutil._common import open_text
-from psutil._compat import long
 from psutil._compat import PY3
+from psutil._compat import FileNotFoundError
+from psutil._compat import long
+from psutil._compat import super
 from psutil.tests import APPVEYOR
-from psutil.tests import call_until
-from psutil.tests import copyload_shared_lib
-from psutil.tests import create_exe
-from psutil.tests import create_proc_children_pair
-from psutil.tests import create_zombie_proc
-from psutil.tests import enum
-from psutil.tests import get_test_subprocess
+from psutil.tests import CI_TESTING
+from psutil.tests import GITHUB_ACTIONS
+from psutil.tests import GLOBAL_TIMEOUT
 from psutil.tests import HAS_CPU_AFFINITY
 from psutil.tests import HAS_ENVIRON
 from psutil.tests import HAS_IONICE
@@ -51,20 +49,23 @@ from psutil.tests import HAS_PROC_CPU_NUM
 from psutil.tests import HAS_PROC_IO_COUNTERS
 from psutil.tests import HAS_RLIMIT
 from psutil.tests import HAS_THREADS
-from psutil.tests import mock
+from psutil.tests import MACOS_11PLUS
 from psutil.tests import PYPY
 from psutil.tests import PYTHON_EXE
+from psutil.tests import PYTHON_EXE_ENV
+from psutil.tests import PsutilTestCase
+from psutil.tests import ThreadTask
+from psutil.tests import call_until
+from psutil.tests import copyload_shared_lib
+from psutil.tests import create_c_exe
+from psutil.tests import create_py_exe
+from psutil.tests import mock
+from psutil.tests import process_namespace
 from psutil.tests import reap_children
 from psutil.tests import retry_on_failure
-from psutil.tests import safe_rmpath
 from psutil.tests import sh
 from psutil.tests import skip_on_access_denied
 from psutil.tests import skip_on_not_implemented
-from psutil.tests import TESTFILE_PREFIX
-from psutil.tests import TESTFN
-from psutil.tests import ThreadTask
-from psutil.tests import TRAVIS
-from psutil.tests import unittest
 from psutil.tests import wait_for_pid
 
 
@@ -72,168 +73,173 @@ from psutil.tests import wait_for_pid
 # --- psutil.Process class tests
 # ===================================================================
 
-class TestProcess(unittest.TestCase):
+
+class TestProcess(PsutilTestCase):
     """Tests for psutil.Process class."""
 
-    def setUp(self):
-        safe_rmpath(TESTFN)
+    def spawn_psproc(self, *args, **kwargs):
+        sproc = self.spawn_testproc(*args, **kwargs)
+        try:
+            return psutil.Process(sproc.pid)
+        except psutil.NoSuchProcess:
+            self.assertPidGone(sproc.pid)
+            raise
 
-    def tearDown(self):
-        reap_children()
+    # ---
 
     def test_pid(self):
         p = psutil.Process()
         self.assertEqual(p.pid, os.getpid())
-        sproc = get_test_subprocess()
-        self.assertEqual(psutil.Process(sproc.pid).pid, sproc.pid)
         with self.assertRaises(AttributeError):
             p.pid = 33
 
     def test_kill(self):
-        sproc = get_test_subprocess()
-        test_pid = sproc.pid
-        p = psutil.Process(test_pid)
+        p = self.spawn_psproc()
         p.kill()
-        sig = p.wait()
-        self.assertFalse(psutil.pid_exists(test_pid))
-        if POSIX:
-            self.assertEqual(sig, -signal.SIGKILL)
+        code = p.wait()
+        if WINDOWS:
+            self.assertEqual(code, signal.SIGTERM)
+        else:
+            self.assertEqual(code, -signal.SIGKILL)
+        self.assertProcessGone(p)
 
     def test_terminate(self):
-        sproc = get_test_subprocess()
-        test_pid = sproc.pid
-        p = psutil.Process(test_pid)
+        p = self.spawn_psproc()
         p.terminate()
-        sig = p.wait()
-        self.assertFalse(psutil.pid_exists(test_pid))
-        if POSIX:
-            self.assertEqual(sig, -signal.SIGTERM)
+        code = p.wait()
+        if WINDOWS:
+            self.assertEqual(code, signal.SIGTERM)
+        else:
+            self.assertEqual(code, -signal.SIGTERM)
+        self.assertProcessGone(p)
 
     def test_send_signal(self):
         sig = signal.SIGKILL if POSIX else signal.SIGTERM
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         p.send_signal(sig)
-        exit_sig = p.wait()
-        self.assertFalse(psutil.pid_exists(p.pid))
-        if POSIX:
-            self.assertEqual(exit_sig, -sig)
-            #
-            sproc = get_test_subprocess()
-            p = psutil.Process(sproc.pid)
-            p.send_signal(sig)
-            with mock.patch('psutil.os.kill',
-                            side_effect=OSError(errno.ESRCH, "")):
-                with self.assertRaises(psutil.NoSuchProcess):
-                    p.send_signal(sig)
-            #
-            sproc = get_test_subprocess()
-            p = psutil.Process(sproc.pid)
-            p.send_signal(sig)
-            with mock.patch('psutil.os.kill',
-                            side_effect=OSError(errno.EPERM, "")):
-                with self.assertRaises(psutil.AccessDenied):
-                    psutil.Process().send_signal(sig)
-            # Sending a signal to process with PID 0 is not allowed as
-            # it would affect every process in the process group of
-            # the calling process (os.getpid()) instead of PID 0").
-            if 0 in psutil.pids():
-                p = psutil.Process(0)
-                self.assertRaises(ValueError, p.send_signal, signal.SIGTERM)
-
-    def test_wait(self):
-        # check exit code signal
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        p.kill()
         code = p.wait()
-        if POSIX:
-            self.assertEqual(code, -signal.SIGKILL)
+        if WINDOWS:
+            self.assertEqual(code, sig)
         else:
-            self.assertEqual(code, signal.SIGTERM)
-        self.assertFalse(p.is_running())
+            self.assertEqual(code, -sig)
+        self.assertProcessGone(p)
 
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        p.terminate()
+    @unittest.skipIf(not POSIX, "not POSIX")
+    def test_send_signal_mocked(self):
+        sig = signal.SIGTERM
+        p = self.spawn_psproc()
+        with mock.patch(
+            'psutil.os.kill', side_effect=OSError(errno.ESRCH, "")
+        ):
+            self.assertRaises(psutil.NoSuchProcess, p.send_signal, sig)
+
+        p = self.spawn_psproc()
+        with mock.patch(
+            'psutil.os.kill', side_effect=OSError(errno.EPERM, "")
+        ):
+            self.assertRaises(psutil.AccessDenied, p.send_signal, sig)
+
+    def test_wait_exited(self):
+        # Test waitpid() + WIFEXITED -> WEXITSTATUS.
+        # normal return, same as exit(0)
+        cmd = [PYTHON_EXE, "-c", "pass"]
+        p = self.spawn_psproc(cmd)
         code = p.wait()
+        self.assertEqual(code, 0)
+        self.assertProcessGone(p)
+        # exit(1), implicit in case of error
+        cmd = [PYTHON_EXE, "-c", "1 / 0"]
+        p = self.spawn_psproc(cmd, stderr=subprocess.PIPE)
+        code = p.wait()
+        self.assertEqual(code, 1)
+        self.assertProcessGone(p)
+        # via sys.exit()
+        cmd = [PYTHON_EXE, "-c", "import sys; sys.exit(5);"]
+        p = self.spawn_psproc(cmd)
+        code = p.wait()
+        self.assertEqual(code, 5)
+        self.assertProcessGone(p)
+        # via os._exit()
+        cmd = [PYTHON_EXE, "-c", "import os; os._exit(5);"]
+        p = self.spawn_psproc(cmd)
+        code = p.wait()
+        self.assertEqual(code, 5)
+        self.assertProcessGone(p)
+
+    @unittest.skipIf(NETBSD, "fails on NETBSD")
+    def test_wait_stopped(self):
+        p = self.spawn_psproc()
         if POSIX:
-            self.assertEqual(code, -signal.SIGTERM)
+            # Test waitpid() + WIFSTOPPED and WIFCONTINUED.
+            # Note: if a process is stopped it ignores SIGTERM.
+            p.send_signal(signal.SIGSTOP)
+            self.assertRaises(psutil.TimeoutExpired, p.wait, timeout=0.001)
+            p.send_signal(signal.SIGCONT)
+            self.assertRaises(psutil.TimeoutExpired, p.wait, timeout=0.001)
+            p.send_signal(signal.SIGTERM)
+            self.assertEqual(p.wait(), -signal.SIGTERM)
+            self.assertEqual(p.wait(), -signal.SIGTERM)
         else:
-            self.assertEqual(code, signal.SIGTERM)
-        self.assertFalse(p.is_running())
-
-        # check sys.exit() code
-        code = "import time, sys; time.sleep(0.01); sys.exit(5);"
-        sproc = get_test_subprocess([PYTHON_EXE, "-c", code])
-        p = psutil.Process(sproc.pid)
-        self.assertEqual(p.wait(), 5)
-        self.assertFalse(p.is_running())
-
-        # Test wait() issued twice.
-        # It is not supposed to raise NSP when the process is gone.
-        # On UNIX this should return None, on Windows it should keep
-        # returning the exit code.
-        sproc = get_test_subprocess([PYTHON_EXE, "-c", code])
-        p = psutil.Process(sproc.pid)
-        self.assertEqual(p.wait(), 5)
-        self.assertIn(p.wait(), (5, None))
-
-        # test timeout
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        p.name()
-        self.assertRaises(psutil.TimeoutExpired, p.wait, 0.01)
-
-        # timeout < 0 not allowed
-        self.assertRaises(ValueError, p.wait, -1)
+            p.suspend()
+            self.assertRaises(psutil.TimeoutExpired, p.wait, timeout=0.001)
+            p.resume()
+            self.assertRaises(psutil.TimeoutExpired, p.wait, timeout=0.001)
+            p.terminate()
+            self.assertEqual(p.wait(), signal.SIGTERM)
+            self.assertEqual(p.wait(), signal.SIGTERM)
 
     def test_wait_non_children(self):
         # Test wait() against a process which is not our direct
         # child.
-        p1, p2 = create_proc_children_pair()
-        self.assertRaises(psutil.TimeoutExpired, p1.wait, 0.01)
-        self.assertRaises(psutil.TimeoutExpired, p2.wait, 0.01)
+        child, grandchild = self.spawn_children_pair()
+        self.assertRaises(psutil.TimeoutExpired, child.wait, 0.01)
+        self.assertRaises(psutil.TimeoutExpired, grandchild.wait, 0.01)
         # We also terminate the direct child otherwise the
         # grandchild will hang until the parent is gone.
-        p1.terminate()
-        p2.terminate()
-        ret1 = p1.wait()
-        ret2 = p2.wait()
+        child.terminate()
+        grandchild.terminate()
+        child_ret = child.wait()
+        grandchild_ret = grandchild.wait()
         if POSIX:
-            self.assertEqual(ret1, -signal.SIGTERM)
+            self.assertEqual(child_ret, -signal.SIGTERM)
             # For processes which are not our children we're supposed
             # to get None.
-            self.assertEqual(ret2, None)
+            self.assertEqual(grandchild_ret, None)
         else:
-            self.assertEqual(ret1, signal.SIGTERM)
-            self.assertEqual(ret1, signal.SIGTERM)
+            self.assertEqual(child_ret, signal.SIGTERM)
+            self.assertEqual(child_ret, signal.SIGTERM)
 
-    def test_wait_timeout_0(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+    def test_wait_timeout(self):
+        p = self.spawn_psproc()
+        p.name()
+        self.assertRaises(psutil.TimeoutExpired, p.wait, 0.01)
+        self.assertRaises(psutil.TimeoutExpired, p.wait, 0)
+        self.assertRaises(ValueError, p.wait, -1)
+
+    def test_wait_timeout_nonblocking(self):
+        p = self.spawn_psproc()
         self.assertRaises(psutil.TimeoutExpired, p.wait, 0)
         p.kill()
-        stop_at = time.time() + 2
-        while True:
+        stop_at = time.time() + GLOBAL_TIMEOUT
+        while time.time() < stop_at:
             try:
                 code = p.wait(0)
-            except psutil.TimeoutExpired:
-                if time.time() >= stop_at:
-                    raise
-            else:
                 break
+            except psutil.TimeoutExpired:
+                pass
+        else:
+            raise self.fail('timeout')
         if POSIX:
             self.assertEqual(code, -signal.SIGKILL)
         else:
             self.assertEqual(code, signal.SIGTERM)
-        self.assertFalse(p.is_running())
+        self.assertProcessGone(p)
 
     def test_cpu_percent(self):
         p = psutil.Process()
         p.cpu_percent(interval=0.001)
         p.cpu_percent(interval=0.001)
-        for x in range(100):
+        for _ in range(100):
             percent = p.cpu_percent(interval=None)
             self.assertIsInstance(percent, float)
             self.assertGreaterEqual(percent, 0.0)
@@ -249,8 +255,10 @@ class TestProcess(unittest.TestCase):
     def test_cpu_times(self):
         times = psutil.Process().cpu_times()
         assert (times.user > 0.0) or (times.system > 0.0), times
-        assert (times.children_user >= 0.0), times
-        assert (times.children_system >= 0.0), times
+        assert times.children_user >= 0.0, times
+        assert times.children_system >= 0.0, times
+        if LINUX:
+            assert times.iowait >= 0.0, times
         # make sure returned values can be pretty printed with strftime
         for name in times._fields:
             time.strftime("%H:%M:%S", time.localtime(getattr(times, name)))
@@ -263,10 +271,10 @@ class TestProcess(unittest.TestCase):
         # using a tolerance  of +/- 0.1 seconds.
         # It will fail if the difference between the values is > 0.1s.
         if (max([user_time, utime]) - min([user_time, utime])) > 0.1:
-            self.fail("expected: %s, found: %s" % (utime, user_time))
+            raise self.fail("expected: %s, found: %s" % (utime, user_time))
 
         if (max([kernel_time, ktime]) - min([kernel_time, ktime])) > 0.1:
-            self.fail("expected: %s, found: %s" % (ktime, kernel_time))
+            raise self.fail("expected: %s, found: %s" % (ktime, kernel_time))
 
     @unittest.skipIf(not HAS_PROC_CPU_NUM, "not supported")
     def test_cpu_num(self):
@@ -278,9 +286,8 @@ class TestProcess(unittest.TestCase):
         self.assertIn(p.cpu_num(), range(psutil.cpu_count()))
 
     def test_create_time(self):
-        sproc = get_test_subprocess()
+        p = self.spawn_psproc()
         now = time.time()
-        p = psutil.Process(sproc.pid)
         create_time = p.create_time()
 
         # Use time.time() as base value to compare our result using a
@@ -288,27 +295,25 @@ class TestProcess(unittest.TestCase):
         # It will fail if the difference between the values is > 2s.
         difference = abs(create_time - now)
         if difference > 2:
-            self.fail("expected: %s, found: %s, difference: %s"
-                      % (now, create_time, difference))
+            raise self.fail(
+                "expected: %s, found: %s, difference: %s"
+                % (now, create_time, difference)
+            )
 
         # make sure returned value can be pretty printed with strftime
         time.strftime("%Y %m %d %H:%M:%S", time.localtime(p.create_time()))
 
     @unittest.skipIf(not POSIX, 'POSIX only')
-    @unittest.skipIf(TRAVIS, 'not reliable on TRAVIS')
     def test_terminal(self):
         terminal = psutil.Process().terminal()
-        if sys.stdin.isatty() or sys.stdout.isatty():
+        if terminal is not None:
             tty = os.path.realpath(sh('tty'))
             self.assertEqual(terminal, tty)
-        else:
-            self.assertIsNone(terminal)
 
     @unittest.skipIf(not HAS_PROC_IO_COUNTERS, 'not supported')
     @skip_on_not_implemented(only_if=LINUX)
     def test_io_counters(self):
         p = psutil.Process()
-
         # test reads
         io1 = p.io_counters()
         with open(PYTHON_EXE, 'rb') as f:
@@ -326,7 +331,7 @@ class TestProcess(unittest.TestCase):
 
         # test writes
         io1 = p.io_counters()
-        with tempfile.TemporaryFile(prefix=TESTFILE_PREFIX) as f:
+        with open(self.get_testfn(), 'wb') as f:
             if PY3:
                 f.write(bytes("x" * 1000000, 'ascii'))
             else:
@@ -351,79 +356,80 @@ class TestProcess(unittest.TestCase):
     @unittest.skipIf(not HAS_IONICE, "not supported")
     @unittest.skipIf(not LINUX, "linux only")
     def test_ionice_linux(self):
+        def cleanup(init):
+            ioclass, value = init
+            if ioclass == psutil.IOPRIO_CLASS_NONE:
+                value = 0
+            p.ionice(ioclass, value)
+
         p = psutil.Process()
-        self.assertEqual(p.ionice()[0], psutil.IOPRIO_CLASS_NONE)
+        if not CI_TESTING:
+            self.assertEqual(p.ionice()[0], psutil.IOPRIO_CLASS_NONE)
         self.assertEqual(psutil.IOPRIO_CLASS_NONE, 0)
         self.assertEqual(psutil.IOPRIO_CLASS_RT, 1)  # high
         self.assertEqual(psutil.IOPRIO_CLASS_BE, 2)  # normal
         self.assertEqual(psutil.IOPRIO_CLASS_IDLE, 3)  # low
+        init = p.ionice()
+        self.addCleanup(cleanup, init)
+
+        # low
+        p.ionice(psutil.IOPRIO_CLASS_IDLE)
+        self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_IDLE, 0))
+        with self.assertRaises(ValueError):  # accepts no value
+            p.ionice(psutil.IOPRIO_CLASS_IDLE, value=7)
+        # normal
+        p.ionice(psutil.IOPRIO_CLASS_BE)
+        self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_BE, 0))
+        p.ionice(psutil.IOPRIO_CLASS_BE, value=7)
+        self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_BE, 7))
+        with self.assertRaises(ValueError):
+            p.ionice(psutil.IOPRIO_CLASS_BE, value=8)
         try:
-            # low
-            p.ionice(psutil.IOPRIO_CLASS_IDLE)
-            self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_IDLE, 0))
-            with self.assertRaises(ValueError):  # accepts no value
-                p.ionice(psutil.IOPRIO_CLASS_IDLE, value=7)
-            # normal
-            p.ionice(psutil.IOPRIO_CLASS_BE)
-            self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_BE, 0))
-            p.ionice(psutil.IOPRIO_CLASS_BE, value=7)
-            self.assertEqual(tuple(p.ionice()), (psutil.IOPRIO_CLASS_BE, 7))
-            with self.assertRaises(ValueError):
-                p.ionice(psutil.IOPRIO_CLASS_BE, value=8)
-            # high
-            if os.getuid() == 0:  # root
-                p.ionice(psutil.IOPRIO_CLASS_RT)
-                self.assertEqual(tuple(p.ionice()),
-                                 (psutil.IOPRIO_CLASS_RT, 0))
-                p.ionice(psutil.IOPRIO_CLASS_RT, value=7)
-                self.assertEqual(tuple(p.ionice()),
-                                 (psutil.IOPRIO_CLASS_RT, 7))
-                with self.assertRaises(ValueError):
-                    p.ionice(psutil.IOPRIO_CLASS_IDLE, value=8)
-            # errs
-            self.assertRaisesRegex(
-                ValueError, "ioclass accepts no value",
-                p.ionice, psutil.IOPRIO_CLASS_NONE, 1)
-            self.assertRaisesRegex(
-                ValueError, "ioclass accepts no value",
-                p.ionice, psutil.IOPRIO_CLASS_IDLE, 1)
-            self.assertRaisesRegex(
-                ValueError, "'ioclass' argument must be specified",
-                p.ionice, value=1)
-        finally:
-            p.ionice(psutil.IOPRIO_CLASS_BE)
+            p.ionice(psutil.IOPRIO_CLASS_RT, value=7)
+        except psutil.AccessDenied:
+            pass
+        # errs
+        with self.assertRaisesRegex(ValueError, "ioclass accepts no value"):
+            p.ionice(psutil.IOPRIO_CLASS_NONE, 1)
+        with self.assertRaisesRegex(ValueError, "ioclass accepts no value"):
+            p.ionice(psutil.IOPRIO_CLASS_IDLE, 1)
+        with self.assertRaisesRegex(
+            ValueError, "'ioclass' argument must be specified"
+        ):
+            p.ionice(value=1)
 
     @unittest.skipIf(not HAS_IONICE, "not supported")
     @unittest.skipIf(not WINDOWS, 'not supported on this win version')
     def test_ionice_win(self):
         p = psutil.Process()
-        self.assertEqual(p.ionice(), psutil.IOPRIO_NORMAL)
-        try:
-            # base
-            p.ionice(psutil.IOPRIO_VERYLOW)
-            self.assertEqual(p.ionice(), psutil.IOPRIO_VERYLOW)
-            p.ionice(psutil.IOPRIO_LOW)
-            self.assertEqual(p.ionice(), psutil.IOPRIO_LOW)
-            try:
-                p.ionice(psutil.IOPRIO_HIGH)
-            except psutil.AccessDenied:
-                pass
-            else:
-                self.assertEqual(p.ionice(), psutil.IOPRIO_HIGH)
-            # errs
-            self.assertRaisesRegex(
-                TypeError, "value argument not accepted on Windows",
-                p.ionice, psutil.IOPRIO_NORMAL, value=1)
-            self.assertRaisesRegex(
-                ValueError, "is not a valid priority",
-                p.ionice, psutil.IOPRIO_HIGH + 1)
-        finally:
-            p.ionice(psutil.IOPRIO_NORMAL)
+        if not CI_TESTING:
             self.assertEqual(p.ionice(), psutil.IOPRIO_NORMAL)
+        init = p.ionice()
+        self.addCleanup(p.ionice, init)
+
+        # base
+        p.ionice(psutil.IOPRIO_VERYLOW)
+        self.assertEqual(p.ionice(), psutil.IOPRIO_VERYLOW)
+        p.ionice(psutil.IOPRIO_LOW)
+        self.assertEqual(p.ionice(), psutil.IOPRIO_LOW)
+        try:
+            p.ionice(psutil.IOPRIO_HIGH)
+        except psutil.AccessDenied:
+            pass
+        else:
+            self.assertEqual(p.ionice(), psutil.IOPRIO_HIGH)
+        # errs
+        with self.assertRaisesRegex(
+            TypeError, "value argument not accepted on Windows"
+        ):
+            p.ionice(psutil.IOPRIO_NORMAL, value=1)
+        with self.assertRaisesRegex(ValueError, "is not a valid priority"):
+            p.ionice(psutil.IOPRIO_HIGH + 1)
 
     @unittest.skipIf(not HAS_RLIMIT, "not supported")
     def test_rlimit_get(self):
         import resource
+
         p = psutil.Process(os.getpid())
         names = [x for x in dir(psutil) if x.startswith('RLIMIT')]
         assert names, names
@@ -446,32 +452,34 @@ class TestProcess(unittest.TestCase):
 
     @unittest.skipIf(not HAS_RLIMIT, "not supported")
     def test_rlimit_set(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         p.rlimit(psutil.RLIMIT_NOFILE, (5, 5))
         self.assertEqual(p.rlimit(psutil.RLIMIT_NOFILE), (5, 5))
         # If pid is 0 prlimit() applies to the calling process and
         # we don't want that.
-        with self.assertRaises(ValueError):
-            psutil._psplatform.Process(0).rlimit(0)
+        if LINUX:
+            with self.assertRaisesRegex(ValueError, "can't use prlimit"):
+                psutil._psplatform.Process(0).rlimit(0)
         with self.assertRaises(ValueError):
             p.rlimit(psutil.RLIMIT_NOFILE, (5, 5, 5))
 
     @unittest.skipIf(not HAS_RLIMIT, "not supported")
     def test_rlimit(self):
         p = psutil.Process()
+        testfn = self.get_testfn()
         soft, hard = p.rlimit(psutil.RLIMIT_FSIZE)
         try:
             p.rlimit(psutil.RLIMIT_FSIZE, (1024, hard))
-            with open(TESTFN, "wb") as f:
+            with open(testfn, "wb") as f:
                 f.write(b"X" * 1024)
             # write() or flush() doesn't always cause the exception
             # but close() will.
             with self.assertRaises(IOError) as exc:
-                with open(TESTFN, "wb") as f:
+                with open(testfn, "wb") as f:
                     f.write(b"X" * 1025)
-            self.assertEqual(exc.exception.errno if PY3 else exc.exception[0],
-                             errno.EFBIG)
+            self.assertEqual(
+                exc.exception.errno if PY3 else exc.exception[0], errno.EFBIG
+            )
         finally:
             p.rlimit(psutil.RLIMIT_FSIZE, (soft, hard))
             self.assertEqual(p.rlimit(psutil.RLIMIT_FSIZE), (soft, hard))
@@ -485,7 +493,7 @@ class TestProcess(unittest.TestCase):
         try:
             p.rlimit(psutil.RLIMIT_FSIZE, (1024, hard))
             p.rlimit(psutil.RLIMIT_FSIZE, (psutil.RLIM_INFINITY, hard))
-            with open(TESTFN, "wb") as f:
+            with open(self.get_testfn(), "wb") as f:
                 f.write(b"X" * 2048)
         finally:
             p.rlimit(psutil.RLIMIT_FSIZE, (soft, hard))
@@ -550,21 +558,24 @@ class TestProcess(unittest.TestCase):
     @skip_on_access_denied(only_if=MACOS)
     @unittest.skipIf(not HAS_THREADS, 'not supported')
     def test_threads_2(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         if OPENBSD:
             try:
                 p.threads()
             except psutil.AccessDenied:
-                raise unittest.SkipTest(
-                    "on OpenBSD this requires root access")
+                raise unittest.SkipTest("on OpenBSD this requires root access")
         self.assertAlmostEqual(
             p.cpu_times().user,
-            sum([x.user_time for x in p.threads()]), delta=0.1)
+            sum([x.user_time for x in p.threads()]),
+            delta=0.1,
+        )
         self.assertAlmostEqual(
             p.cpu_times().system,
-            sum([x.system_time for x in p.threads()]), delta=0.1)
+            sum([x.system_time for x in p.threads()]),
+            delta=0.1,
+        )
 
+    @retry_on_failure()
     def test_memory_info(self):
         p = psutil.Process()
 
@@ -596,8 +607,9 @@ class TestProcess(unittest.TestCase):
             self.assertGreaterEqual(getattr(mem, name), 0)
 
     def test_memory_full_info(self):
+        p = psutil.Process()
         total = psutil.virtual_memory().total
-        mem = psutil.Process().memory_full_info()
+        mem = p.memory_full_info()
         for name in mem._fields:
             value = getattr(mem, name)
             self.assertGreaterEqual(value, 0, msg=(name, value))
@@ -614,8 +626,7 @@ class TestProcess(unittest.TestCase):
     def test_memory_maps(self):
         p = psutil.Process()
         maps = p.memory_maps()
-        paths = [x for x in maps]
-        self.assertEqual(len(paths), len(set(paths)))
+        self.assertEqual(len(maps), len(set(maps)))
         ext_maps = p.memory_maps(grouped=False)
 
         for nt in maps:
@@ -623,8 +634,9 @@ class TestProcess(unittest.TestCase):
                 assert os.path.isabs(nt.path), nt.path
                 if POSIX:
                     try:
-                        assert os.path.exists(nt.path) or \
-                            os.path.islink(nt.path), nt.path
+                        assert os.path.exists(nt.path) or os.path.islink(
+                            nt.path
+                        ), nt.path
                     except AssertionError:
                         if not LINUX:
                             raise
@@ -639,13 +651,18 @@ class TestProcess(unittest.TestCase):
                     # 64 bit dlls: they are visible via explorer but cannot
                     # be accessed via os.stat() (wtf?).
                     if '64' not in os.path.basename(nt.path):
-                        assert os.path.exists(nt.path), nt.path
+                        try:
+                            st = os.stat(nt.path)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            assert stat.S_ISREG(st.st_mode), nt.path
         for nt in ext_maps:
             for fname in nt._fields:
                 value = getattr(nt, fname)
                 if fname == 'path':
                     continue
-                elif fname in ('addr', 'perms'):
+                if fname in ('addr', 'perms'):
                     assert value, value
                 else:
                     self.assertIsInstance(value, (int, long))
@@ -654,11 +671,13 @@ class TestProcess(unittest.TestCase):
     @unittest.skipIf(not HAS_MEMORY_MAPS, "not supported")
     def test_memory_maps_lists_lib(self):
         # Make sure a newly loaded shared lib is listed.
+        p = psutil.Process()
         with copyload_shared_lib() as path:
+
             def normpath(p):
                 return os.path.realpath(os.path.normcase(p))
-            libpaths = [normpath(x.path)
-                        for x in psutil.Process().memory_maps()]
+
+            libpaths = [normpath(x.path) for x in p.memory_maps()]
             self.assertIn(normpath(path), libpaths)
 
     def test_memory_percent(self):
@@ -669,8 +688,7 @@ class TestProcess(unittest.TestCase):
             p.memory_percent(memtype='uss')
 
     def test_is_running(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         assert p.is_running()
         assert p.is_running()
         p.kill()
@@ -679,8 +697,8 @@ class TestProcess(unittest.TestCase):
         assert not p.is_running()
 
     def test_exe(self):
-        sproc = get_test_subprocess()
-        exe = psutil.Process(sproc.pid).exe()
+        p = self.spawn_psproc()
+        exe = p.exe()
         try:
             self.assertEqual(exe, PYTHON_EXE)
         except AssertionError:
@@ -697,10 +715,11 @@ class TestProcess(unittest.TestCase):
                 # an error.
                 ver = "%s.%s" % (sys.version_info[0], sys.version_info[1])
                 try:
-                    self.assertEqual(exe.replace(ver, ''),
-                                     PYTHON_EXE.replace(ver, ''))
+                    self.assertEqual(
+                        exe.replace(ver, ''), PYTHON_EXE.replace(ver, '')
+                    )
                 except AssertionError:
-                    # Tipically MACOS. Really not sure what to do here.
+                    # Typically MACOS. Really not sure what to do here.
                     pass
 
         out = sh([exe, "-c", "import os; print('hey')"])
@@ -708,60 +727,83 @@ class TestProcess(unittest.TestCase):
 
     def test_cmdline(self):
         cmdline = [PYTHON_EXE, "-c", "import time; time.sleep(60)"]
-        sproc = get_test_subprocess(cmdline)
-        try:
-            self.assertEqual(' '.join(psutil.Process(sproc.pid).cmdline()),
-                             ' '.join(cmdline))
-        except AssertionError:
-            # XXX - most of the times the underlying sysctl() call on Net
-            # and Open BSD returns a truncated string.
-            # Also /proc/pid/cmdline behaves the same so it looks
-            # like this is a kernel bug.
-            # XXX - AIX truncates long arguments in /proc/pid/cmdline
-            if NETBSD or OPENBSD or AIX:
-                self.assertEqual(
-                    psutil.Process(sproc.pid).cmdline()[0], PYTHON_EXE)
-            else:
-                raise
+        p = self.spawn_psproc(cmdline)
+        # XXX - most of the times the underlying sysctl() call on Net
+        # and Open BSD returns a truncated string.
+        # Also /proc/pid/cmdline behaves the same so it looks
+        # like this is a kernel bug.
+        # XXX - AIX truncates long arguments in /proc/pid/cmdline
+        if NETBSD or OPENBSD or AIX:
+            self.assertEqual(p.cmdline()[0], PYTHON_EXE)
+        else:
+            if MACOS and CI_TESTING:
+                pyexe = p.cmdline()[0]
+                if pyexe != PYTHON_EXE:
+                    self.assertEqual(
+                        ' '.join(p.cmdline()[1:]), ' '.join(cmdline[1:])
+                    )
+                    return
+            self.assertEqual(' '.join(p.cmdline()), ' '.join(cmdline))
+
+    @unittest.skipIf(PYPY, "broken on PYPY")
+    def test_long_cmdline(self):
+        cmdline = [PYTHON_EXE]
+        cmdline.extend(["-v"] * 50)
+        cmdline.extend(["-c", "import time; time.sleep(10)"])
+        p = self.spawn_psproc(cmdline)
+        if OPENBSD:
+            # XXX: for some reason the test process may turn into a
+            # zombie (don't know why).
+            try:
+                self.assertEqual(p.cmdline(), cmdline)
+            except psutil.ZombieProcess:
+                raise self.skipTest("OPENBSD: process turned into zombie")
+        else:
+            self.assertEqual(p.cmdline(), cmdline)
 
     def test_name(self):
-        sproc = get_test_subprocess(PYTHON_EXE)
-        name = psutil.Process(sproc.pid).name().lower()
+        p = self.spawn_psproc()
+        name = p.name().lower()
         pyexe = os.path.basename(os.path.realpath(sys.executable)).lower()
         assert pyexe.startswith(name), (pyexe, name)
+
+    @unittest.skipIf(PYPY, "unreliable on PYPY")
+    def test_long_name(self):
+        pyexe = create_py_exe(self.get_testfn(suffix="0123456789" * 2))
+        cmdline = [pyexe, "-c", "import time; time.sleep(10)"]
+        p = self.spawn_psproc(cmdline)
+        if OPENBSD:
+            # XXX: for some reason the test process may turn into a
+            # zombie (don't know why). Because the name() is long, all
+            # UNIX kernels truncate it to 15 chars, so internally psutil
+            # tries to guess the full name() from the cmdline(). But the
+            # cmdline() of a zombie on OpenBSD fails (internally), so we
+            # just compare the first 15 chars. Full explanation:
+            # https://github.com/giampaolo/psutil/issues/2239
+            try:
+                self.assertEqual(p.name(), os.path.basename(pyexe))
+            except AssertionError:
+                if p.status() == psutil.STATUS_ZOMBIE:
+                    assert os.path.basename(pyexe).startswith(p.name())
+                else:
+                    raise
+        else:
+            self.assertEqual(p.name(), os.path.basename(pyexe))
 
     # XXX
     @unittest.skipIf(SUNOS, "broken on SUNOS")
     @unittest.skipIf(AIX, "broken on AIX")
+    @unittest.skipIf(PYPY, "broken on PYPY")
     def test_prog_w_funky_name(self):
         # Test that name(), exe() and cmdline() correctly handle programs
         # with funky chars such as spaces and ")", see:
         # https://github.com/giampaolo/psutil/issues/628
-
-        def rm():
-            # Try to limit occasional failures on Appveyor:
-            # https://ci.appveyor.com/project/giampaolo/psutil/build/1350/
-            #     job/lbo3bkju55le850n
-            try:
-                safe_rmpath(funky_path)
-            except OSError:
-                pass
-
-        funky_path = TESTFN + 'foo bar )'
-        create_exe(funky_path)
-        self.addCleanup(rm)
-        cmdline = [funky_path, "-c",
-                   "import time; [time.sleep(0.01) for x in range(3000)];"
-                   "arg1", "arg2", "", "arg3", ""]
-        sproc = get_test_subprocess(cmdline)
-        p = psutil.Process(sproc.pid)
-        # ...in order to try to prevent occasional failures on travis
-        if TRAVIS:
-            wait_for_pid(p.pid)
+        pyexe = create_py_exe(self.get_testfn(suffix='foo bar )'))
+        cmdline = [pyexe, "-c", "import time; time.sleep(10)"]
+        p = self.spawn_psproc(cmdline)
         self.assertEqual(p.cmdline(), cmdline)
-        self.assertEqual(p.name(), os.path.basename(funky_path))
-        self.assertEqual(os.path.normcase(p.exe()),
-                         os.path.normcase(funky_path))
+        self.assertEqual(p.name(), os.path.basename(pyexe))
+        self.assertEqual(os.path.normcase(p.exe()), os.path.normcase(pyexe))
 
     @unittest.skipIf(not POSIX, 'POSIX only')
     def test_uids(self):
@@ -792,33 +834,60 @@ class TestProcess(unittest.TestCase):
             self.assertEqual(os.getresgid(), p.gids())
 
     def test_nice(self):
+        def cleanup(init):
+            try:
+                p.nice(init)
+            except psutil.AccessDenied:
+                pass
+
         p = psutil.Process()
         self.assertRaises(TypeError, p.nice, "str")
+        init = p.nice()
+        self.addCleanup(cleanup, init)
+
         if WINDOWS:
-            try:
-                init = p.nice()
-                if sys.version_info > (3, 4):
-                    self.assertIsInstance(init, enum.IntEnum)
-                else:
-                    self.assertIsInstance(init, int)
-                self.assertEqual(init, psutil.NORMAL_PRIORITY_CLASS)
-                p.nice(psutil.HIGH_PRIORITY_CLASS)
-                self.assertEqual(p.nice(), psutil.HIGH_PRIORITY_CLASS)
-                p.nice(psutil.NORMAL_PRIORITY_CLASS)
-                self.assertEqual(p.nice(), psutil.NORMAL_PRIORITY_CLASS)
-            finally:
-                p.nice(psutil.NORMAL_PRIORITY_CLASS)
+            highest_prio = None
+            for prio in [
+                psutil.IDLE_PRIORITY_CLASS,
+                psutil.BELOW_NORMAL_PRIORITY_CLASS,
+                psutil.NORMAL_PRIORITY_CLASS,
+                psutil.ABOVE_NORMAL_PRIORITY_CLASS,
+                psutil.HIGH_PRIORITY_CLASS,
+                psutil.REALTIME_PRIORITY_CLASS,
+            ]:
+                with self.subTest(prio=prio):
+                    try:
+                        p.nice(prio)
+                    except psutil.AccessDenied:
+                        pass
+                    else:
+                        new_prio = p.nice()
+                        # The OS may limit our maximum priority,
+                        # even if the function succeeds. For higher
+                        # priorities, we match either the expected
+                        # value or the highest so far.
+                        if prio in (
+                            psutil.ABOVE_NORMAL_PRIORITY_CLASS,
+                            psutil.HIGH_PRIORITY_CLASS,
+                            psutil.REALTIME_PRIORITY_CLASS,
+                        ):
+                            if new_prio == prio or highest_prio is None:
+                                highest_prio = prio
+                                self.assertEqual(new_prio, highest_prio)
+                        else:
+                            self.assertEqual(new_prio, prio)
         else:
-            first_nice = p.nice()
             try:
                 if hasattr(os, "getpriority"):
                     self.assertEqual(
-                        os.getpriority(os.PRIO_PROCESS, os.getpid()), p.nice())
+                        os.getpriority(os.PRIO_PROCESS, os.getpid()), p.nice()
+                    )
                 p.nice(1)
                 self.assertEqual(p.nice(), 1)
                 if hasattr(os, "getpriority"):
                     self.assertEqual(
-                        os.getpriority(os.PRIO_PROCESS, os.getpid()), p.nice())
+                        os.getpriority(os.PRIO_PROCESS, os.getpid()), p.nice()
+                    )
                 # XXX - going back to previous nice value raises
                 # AccessDenied on MACOS
                 if not MACOS:
@@ -826,38 +895,39 @@ class TestProcess(unittest.TestCase):
                     self.assertEqual(p.nice(), 0)
             except psutil.AccessDenied:
                 pass
-            finally:
-                try:
-                    p.nice(first_nice)
-                except psutil.AccessDenied:
-                    pass
 
     def test_status(self):
         p = psutil.Process()
         self.assertEqual(p.status(), psutil.STATUS_RUNNING)
 
     def test_username(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         username = p.username()
         if WINDOWS:
             domain, username = username.split('\\')
-            self.assertEqual(username, getpass.getuser())
+            getpass_user = getpass.getuser()
+            if getpass_user.endswith('$'):
+                # When running as a service account (most likely to be
+                # NetworkService), these user name calculations don't produce
+                # the same result, causing the test to fail.
+                raise unittest.SkipTest('running as service account')
+            self.assertEqual(username, getpass_user)
             if 'USERDOMAIN' in os.environ:
                 self.assertEqual(domain, os.environ['USERDOMAIN'])
         else:
             self.assertEqual(username, getpass.getuser())
 
     def test_cwd(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         self.assertEqual(p.cwd(), os.getcwd())
 
     def test_cwd_2(self):
-        cmd = [PYTHON_EXE, "-c",
-               "import os, time; os.chdir('..'); time.sleep(60)"]
-        sproc = get_test_subprocess(cmd)
-        p = psutil.Process(sproc.pid)
+        cmd = [
+            PYTHON_EXE,
+            "-c",
+            "import os, time; os.chdir('..'); time.sleep(60)",
+        ]
+        p = self.spawn_psproc(cmd)
         call_until(p.cwd, "ret == os.path.dirname(os.getcwd())")
 
     @unittest.skipIf(not HAS_CPU_AFFINITY, 'not supported')
@@ -872,14 +942,13 @@ class TestProcess(unittest.TestCase):
         self.assertEqual(len(initial), len(set(initial)))
 
         all_cpus = list(range(len(psutil.cpu_percent(percpu=True))))
-        # Work around travis failure:
-        # https://travis-ci.org/giampaolo/psutil/builds/284173194
-        for n in all_cpus if not TRAVIS else initial:
+        for n in all_cpus:
             p.cpu_affinity([n])
             self.assertEqual(p.cpu_affinity(), [n])
             if hasattr(os, "sched_getaffinity"):
-                self.assertEqual(p.cpu_affinity(),
-                                 list(os.sched_getaffinity(p.pid)))
+                self.assertEqual(
+                    p.cpu_affinity(), list(os.sched_getaffinity(p.pid))
+                )
             # also test num_cpu()
             if hasattr(p, "num_cpu"):
                 self.assertEqual(p.cpu_affinity()[0], p.num_cpu())
@@ -893,20 +962,19 @@ class TestProcess(unittest.TestCase):
         else:
             self.assertEqual(p.cpu_affinity(), all_cpus)
         if hasattr(os, "sched_getaffinity"):
-            self.assertEqual(p.cpu_affinity(),
-                             list(os.sched_getaffinity(p.pid)))
+            self.assertEqual(
+                p.cpu_affinity(), list(os.sched_getaffinity(p.pid))
+            )
         #
         self.assertRaises(TypeError, p.cpu_affinity, 1)
         p.cpu_affinity(initial)
         # it should work with all iterables, not only lists
-        if not TRAVIS:
-            p.cpu_affinity(set(all_cpus))
-            p.cpu_affinity(tuple(all_cpus))
+        p.cpu_affinity(set(all_cpus))
+        p.cpu_affinity(tuple(all_cpus))
 
     @unittest.skipIf(not HAS_CPU_AFFINITY, 'not supported')
     def test_cpu_affinity_errs(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         invalid_cpu = [len(psutil.cpu_times(percpu=True)) + 10]
         self.assertRaises(ValueError, p.cpu_affinity, invalid_cpu)
         self.assertRaises(ValueError, p.cpu_affinity, range(10000, 11000))
@@ -921,52 +989,52 @@ class TestProcess(unittest.TestCase):
         self.addCleanup(p.cpu_affinity, initial)
 
         # All possible CPU set combinations.
+        if len(initial) > 12:
+            initial = initial[:12]  # ...otherwise it will take forever
         combos = []
-        for l in range(0, len(initial) + 1):
-            for subset in itertools.combinations(initial, l):
+        for i in range(len(initial) + 1):
+            for subset in itertools.combinations(initial, i):
                 if subset:
                     combos.append(list(subset))
 
         for combo in combos:
             p.cpu_affinity(combo)
-            self.assertEqual(p.cpu_affinity(), combo)
+            self.assertEqual(sorted(p.cpu_affinity()), sorted(combo))
 
     # TODO: #595
     @unittest.skipIf(BSD, "broken on BSD")
     # can't find any process file on Appveyor
     @unittest.skipIf(APPVEYOR, "unreliable on APPVEYOR")
     def test_open_files(self):
-        # current process
         p = psutil.Process()
+        testfn = self.get_testfn()
         files = p.open_files()
-        self.assertFalse(TESTFN in files)
-        with open(TESTFN, 'wb') as f:
+        self.assertNotIn(testfn, files)
+        with open(testfn, 'wb') as f:
             f.write(b'x' * 1024)
             f.flush()
             # give the kernel some time to see the new file
             files = call_until(p.open_files, "len(ret) != %i" % len(files))
-            for file in files:
-                if file.path == TESTFN:
-                    if LINUX:
+            filenames = [os.path.normcase(x.path) for x in files]
+            self.assertIn(os.path.normcase(testfn), filenames)
+            if LINUX:
+                for file in files:
+                    if file.path == testfn:
                         self.assertEqual(file.position, 1024)
-                    break
-            else:
-                self.fail("no file found; files=%s" % repr(files))
         for file in files:
             assert os.path.isfile(file.path), file
 
         # another process
-        cmdline = "import time; f = open(r'%s', 'r'); time.sleep(60);" % TESTFN
-        sproc = get_test_subprocess([PYTHON_EXE, "-c", cmdline])
-        p = psutil.Process(sproc.pid)
+        cmdline = "import time; f = open(r'%s', 'r'); time.sleep(60);" % testfn
+        p = self.spawn_psproc([PYTHON_EXE, "-c", cmdline])
 
         for x in range(100):
-            filenames = [x.path for x in p.open_files()]
-            if TESTFN in filenames:
+            filenames = [os.path.normcase(x.path) for x in p.open_files()]
+            if testfn in filenames:
                 break
-            time.sleep(.01)
+            time.sleep(0.01)
         else:
-            self.assertIn(TESTFN, filenames)
+            self.assertIn(os.path.normcase(testfn), filenames)
         for file in filenames:
             assert os.path.isfile(file), file
 
@@ -976,14 +1044,21 @@ class TestProcess(unittest.TestCase):
     @unittest.skipIf(APPVEYOR, "unreliable on APPVEYOR")
     def test_open_files_2(self):
         # test fd and path fields
-        with open(TESTFN, 'w') as fileobj:
-            p = psutil.Process()
+        p = psutil.Process()
+        normcase = os.path.normcase
+        testfn = self.get_testfn()
+        with open(testfn, 'w') as fileobj:
             for file in p.open_files():
-                if file.path == fileobj.name or file.fd == fileobj.fileno():
+                if (
+                    normcase(file.path) == normcase(fileobj.name)
+                    or file.fd == fileobj.fileno()
+                ):
                     break
             else:
-                self.fail("no file found; files=%s" % repr(p.open_files()))
-            self.assertEqual(file.path, fileobj.name)
+                raise self.fail(
+                    "no file found; files=%s" % (repr(p.open_files()))
+                )
+            self.assertEqual(normcase(file.path), normcase(fileobj.name))
             if WINDOWS:
                 self.assertEqual(file.fd, -1)
             else:
@@ -998,8 +1073,9 @@ class TestProcess(unittest.TestCase):
     @unittest.skipIf(not POSIX, 'POSIX only')
     def test_num_fds(self):
         p = psutil.Process()
+        testfn = self.get_testfn()
         start = p.num_fds()
-        file = open(TESTFN, 'w')
+        file = open(testfn, 'w')
         self.addCleanup(file.close)
         self.assertEqual(p.num_fds(), start + 1)
         sock = socket.socket()
@@ -1014,93 +1090,69 @@ class TestProcess(unittest.TestCase):
     def test_num_ctx_switches(self):
         p = psutil.Process()
         before = sum(p.num_ctx_switches())
-        for x in range(500000):
+        for _ in range(2):
+            time.sleep(0.05)  # this shall ensure a context switch happens
             after = sum(p.num_ctx_switches())
             if after > before:
                 return
-        self.fail("num ctx switches still the same after 50.000 iterations")
+        raise self.fail("num ctx switches still the same after 2 iterations")
 
     def test_ppid(self):
+        p = psutil.Process()
         if hasattr(os, 'getppid'):
-            self.assertEqual(psutil.Process().ppid(), os.getppid())
-        this_parent = os.getpid()
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        self.assertEqual(p.ppid(), this_parent)
-        # no other process is supposed to have us as parent
-        reap_children(recursive=True)
-        if APPVEYOR:
-            # Occasional failures, see:
-            # https://ci.appveyor.com/project/giampaolo/psutil/build/
-            #     job/0hs623nenj7w4m33
-            return
-        for p in psutil.process_iter():
-            if p.pid == sproc.pid:
-                continue
-            # XXX: sometimes this fails on Windows; not sure why.
-            self.assertNotEqual(p.ppid(), this_parent, msg=p)
+            self.assertEqual(p.ppid(), os.getppid())
+        p = self.spawn_psproc()
+        self.assertEqual(p.ppid(), os.getpid())
 
     def test_parent(self):
-        this_parent = os.getpid()
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        self.assertEqual(p.parent().pid, this_parent)
+        p = self.spawn_psproc()
+        self.assertEqual(p.parent().pid, os.getpid())
 
         lowest_pid = psutil.pids()[0]
         self.assertIsNone(psutil.Process(lowest_pid).parent())
 
     def test_parent_multi(self):
-        p1, p2 = create_proc_children_pair()
-        self.assertEqual(p2.parent(), p1)
-        self.assertEqual(p1.parent(), psutil.Process())
+        parent = psutil.Process()
+        child, grandchild = self.spawn_children_pair()
+        self.assertEqual(grandchild.parent(), child)
+        self.assertEqual(child.parent(), parent)
 
-    def test_parent_disappeared(self):
-        # Emulate a case where the parent process disappeared.
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        with mock.patch("psutil.Process",
-                        side_effect=psutil.NoSuchProcess(0, 'foo')):
-            self.assertIsNone(p.parent())
-
+    @retry_on_failure()
     def test_parents(self):
-        assert psutil.Process().parents()
-        p1, p2 = create_proc_children_pair()
-        self.assertEqual(p1.parents()[0], psutil.Process())
-        self.assertEqual(p2.parents()[0], p1)
-        self.assertEqual(p2.parents()[1], psutil.Process())
-        if POSIX:
-            lowest_pid = psutil.pids()[0]
-            self.assertEqual(p1.parents()[-1].pid, lowest_pid)
-            self.assertEqual(p2.parents()[-1].pid, lowest_pid)
+        parent = psutil.Process()
+        assert parent.parents()
+        child, grandchild = self.spawn_children_pair()
+        self.assertEqual(child.parents()[0], parent)
+        self.assertEqual(grandchild.parents()[0], child)
+        self.assertEqual(grandchild.parents()[1], parent)
 
     def test_children(self):
-        reap_children(recursive=True)
-        p = psutil.Process()
-        self.assertEqual(p.children(), [])
-        self.assertEqual(p.children(recursive=True), [])
+        parent = psutil.Process()
+        self.assertEqual(parent.children(), [])
+        self.assertEqual(parent.children(recursive=True), [])
         # On Windows we set the flag to 0 in order to cancel out the
         # CREATE_NO_WINDOW flag (enabled by default) which creates
         # an extra "conhost.exe" child.
-        sproc = get_test_subprocess(creationflags=0)
-        children1 = p.children()
-        children2 = p.children(recursive=True)
+        child = self.spawn_psproc(creationflags=0)
+        children1 = parent.children()
+        children2 = parent.children(recursive=True)
         for children in (children1, children2):
             self.assertEqual(len(children), 1)
-            self.assertEqual(children[0].pid, sproc.pid)
-            self.assertEqual(children[0].ppid(), os.getpid())
+            self.assertEqual(children[0].pid, child.pid)
+            self.assertEqual(children[0].ppid(), parent.pid)
 
     def test_children_recursive(self):
         # Test children() against two sub processes, p1 and p2, where
         # p1 (our child) spawned p2 (our grandchild).
-        p1, p2 = create_proc_children_pair()
-        p = psutil.Process()
-        self.assertEqual(p.children(), [p1])
-        self.assertEqual(p.children(recursive=True), [p1, p2])
+        parent = psutil.Process()
+        child, grandchild = self.spawn_children_pair()
+        self.assertEqual(parent.children(), [child])
+        self.assertEqual(parent.children(recursive=True), [child, grandchild])
         # If the intermediate process is gone there's no way for
         # children() to recursively find it.
-        p1.terminate()
-        p1.wait()
-        self.assertEqual(p.children(recursive=True), [])
+        child.terminate()
+        child.wait()
+        self.assertEqual(parent.children(recursive=True), [])
 
     def test_children_duplicates(self):
         # find the process which has the highest number of children
@@ -1112,6 +1164,8 @@ class TestProcess(unittest.TestCase):
                 pass
         # this is the one, now let's make sure there are no duplicates
         pid = sorted(table.items(), key=lambda x: x[1])[-1][0]
+        if LINUX and pid == 0:
+            raise self.skipTest("PID 0")
         p = psutil.Process(pid)
         try:
             c = p.children(recursive=True)
@@ -1121,23 +1175,22 @@ class TestProcess(unittest.TestCase):
             self.assertEqual(len(c), len(set(c)))
 
     def test_parents_and_children(self):
-        p1, p2 = create_proc_children_pair()
-        me = psutil.Process()
+        parent = psutil.Process()
+        child, grandchild = self.spawn_children_pair()
         # forward
-        children = me.children(recursive=True)
+        children = parent.children(recursive=True)
         self.assertEqual(len(children), 2)
-        self.assertEqual(children[0], p1)
-        self.assertEqual(children[1], p2)
+        self.assertEqual(children[0], child)
+        self.assertEqual(children[1], grandchild)
         # backward
-        parents = p2.parents()
-        self.assertEqual(parents[0], p1)
-        self.assertEqual(parents[1], me)
+        parents = grandchild.parents()
+        self.assertEqual(parents[0], child)
+        self.assertEqual(parents[1], parent)
 
     def test_suspend_resume(self):
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
+        p = self.spawn_psproc()
         p.suspend()
-        for x in range(100):
+        for _ in range(100):
             if p.status() == psutil.STATUS_STOPPED:
                 break
             time.sleep(0.01)
@@ -1159,27 +1212,36 @@ class TestProcess(unittest.TestCase):
             self.assertEqual(d['connections'], 'foo')
 
         # Test ad_value is set on AccessDenied.
-        with mock.patch('psutil.Process.nice', create=True,
-                        side_effect=psutil.AccessDenied):
+        with mock.patch(
+            'psutil.Process.nice', create=True, side_effect=psutil.AccessDenied
+        ):
             self.assertEqual(
-                p.as_dict(attrs=["nice"], ad_value=1), {"nice": 1})
+                p.as_dict(attrs=["nice"], ad_value=1), {"nice": 1}
+            )
 
         # Test that NoSuchProcess bubbles up.
-        with mock.patch('psutil.Process.nice', create=True,
-                        side_effect=psutil.NoSuchProcess(p.pid, "name")):
-            self.assertRaises(
-                psutil.NoSuchProcess, p.as_dict, attrs=["nice"])
+        with mock.patch(
+            'psutil.Process.nice',
+            create=True,
+            side_effect=psutil.NoSuchProcess(p.pid, "name"),
+        ):
+            self.assertRaises(psutil.NoSuchProcess, p.as_dict, attrs=["nice"])
 
         # Test that ZombieProcess is swallowed.
-        with mock.patch('psutil.Process.nice', create=True,
-                        side_effect=psutil.ZombieProcess(p.pid, "name")):
+        with mock.patch(
+            'psutil.Process.nice',
+            create=True,
+            side_effect=psutil.ZombieProcess(p.pid, "name"),
+        ):
             self.assertEqual(
-                p.as_dict(attrs=["nice"], ad_value="foo"), {"nice": "foo"})
+                p.as_dict(attrs=["nice"], ad_value="foo"), {"nice": "foo"}
+            )
 
         # By default APIs raising NotImplementedError are
         # supposed to be skipped.
-        with mock.patch('psutil.Process.nice', create=True,
-                        side_effect=NotImplementedError):
+        with mock.patch(
+            'psutil.Process.nice', create=True, side_effect=NotImplementedError
+        ):
             d = p.as_dict()
             self.assertNotIn('nice', list(d.keys()))
             # ...unless the user explicitly asked for some attr.
@@ -1195,8 +1257,8 @@ class TestProcess(unittest.TestCase):
             p.as_dict(['foo', 'bar'])
 
     def test_oneshot(self):
+        p = psutil.Process()
         with mock.patch("psutil._psplatform.Process.cpu_times") as m:
-            p = psutil.Process()
             with p.oneshot():
                 p.cpu_times()
                 p.cpu_times()
@@ -1210,9 +1272,9 @@ class TestProcess(unittest.TestCase):
     def test_oneshot_twice(self):
         # Test the case where the ctx manager is __enter__ed twice.
         # The second __enter__ is supposed to resut in a NOOP.
+        p = psutil.Process()
         with mock.patch("psutil._psplatform.Process.cpu_times") as m1:
             with mock.patch("psutil._psplatform.Process.oneshot_enter") as m2:
-                p = psutil.Process()
                 with p.oneshot():
                     p.cpu_times()
                     p.cpu_times()
@@ -1231,7 +1293,7 @@ class TestProcess(unittest.TestCase):
         # Make sure oneshot() cache is nonglobal. Instead it's
         # supposed to be bound to the Process instance, see:
         # https://github.com/giampaolo/psutil/issues/1373
-        p1, p2 = create_proc_children_pair()
+        p1, p2 = self.spawn_children_pair()
         p1_ppid = p1.ppid()
         p2_ppid = p2.ppid()
         self.assertNotEqual(p1_ppid, p2_ppid)
@@ -1250,146 +1312,49 @@ class TestProcess(unittest.TestCase):
         # >>> time.sleep(2)  # time-consuming task, process dies in meantime
         # >>> proc.name()
         # Refers to Issue #15
-        sproc = get_test_subprocess()
-        p = psutil.Process(sproc.pid)
-        p.terminate()
-        p.wait()
-        if WINDOWS:
-            call_until(psutil.pids, "%s not in ret" % p.pid)
-        assert not p.is_running()
-
-        if WINDOWS:
-            with self.assertRaises(psutil.NoSuchProcess):
-                p.send_signal(signal.CTRL_C_EVENT)
-            with self.assertRaises(psutil.NoSuchProcess):
-                p.send_signal(signal.CTRL_BREAK_EVENT)
-
-        excluded_names = ['pid', 'is_running', 'wait', 'create_time',
-                          'oneshot', 'memory_info_ex']
-        if LINUX and not HAS_RLIMIT:
-            excluded_names.append('rlimit')
-        for name in dir(p):
-            if (name.startswith('_') or
-                    name in excluded_names):
-                continue
+        def assert_raises_nsp(fun, fun_name):
             try:
-                meth = getattr(p, name)
-                # get/set methods
-                if name == 'nice':
-                    if POSIX:
-                        ret = meth(1)
-                    else:
-                        ret = meth(psutil.NORMAL_PRIORITY_CLASS)
-                elif name == 'ionice':
-                    ret = meth()
-                    ret = meth(2)
-                elif name == 'rlimit':
-                    ret = meth(psutil.RLIMIT_NOFILE)
-                    ret = meth(psutil.RLIMIT_NOFILE, (5, 5))
-                elif name == 'cpu_affinity':
-                    ret = meth()
-                    ret = meth([0])
-                elif name == 'send_signal':
-                    ret = meth(signal.SIGTERM)
-                else:
-                    ret = meth()
-            except psutil.ZombieProcess:
-                self.fail("ZombieProcess for %r was not supposed to happen" %
-                          name)
+                ret = fun()
+            except psutil.ZombieProcess:  # differentiate from NSP
+                raise
             except psutil.NoSuchProcess:
                 pass
             except psutil.AccessDenied:
-                if OPENBSD and name in ('threads', 'num_threads'):
-                    pass
-                else:
-                    raise
-            except NotImplementedError:
-                pass
+                if OPENBSD and fun_name in ('threads', 'num_threads'):
+                    return
+                raise
             else:
-                self.fail(
-                    "NoSuchProcess exception not raised for %r, retval=%s" % (
-                        name, ret))
+                # NtQuerySystemInformation succeeds even if process is gone.
+                if WINDOWS and fun_name in ('exe', 'name'):
+                    return
+                raise self.fail(
+                    "%r didn't raise NSP and returned %r instead" % (fun, ret)
+                )
+
+        p = self.spawn_psproc()
+        p.terminate()
+        p.wait()
+        if WINDOWS:  # XXX
+            call_until(psutil.pids, "%s not in ret" % p.pid)
+        self.assertProcessGone(p)
+
+        ns = process_namespace(p)
+        for fun, name in ns.iter(ns.all):
+            assert_raises_nsp(fun, name)
 
     @unittest.skipIf(not POSIX, 'POSIX only')
     def test_zombie_process(self):
-        def succeed_or_zombie_p_exc(fun, *args, **kwargs):
-            try:
-                return fun(*args, **kwargs)
-            except (psutil.ZombieProcess, psutil.AccessDenied):
-                pass
-
-        zpid = create_zombie_proc()
-        self.addCleanup(reap_children, recursive=True)
-        # A zombie process should always be instantiable
-        zproc = psutil.Process(zpid)
-        # ...and at least its status always be querable
-        self.assertEqual(zproc.status(), psutil.STATUS_ZOMBIE)
-        # ...and it should be considered 'running'
-        self.assertTrue(zproc.is_running())
-        # ...and as_dict() shouldn't crash
-        zproc.as_dict()
-        # if cmdline succeeds it should be an empty list
-        ret = succeed_or_zombie_p_exc(zproc.suspend)
-        if ret is not None:
-            self.assertEqual(ret, [])
-
-        if hasattr(zproc, "rlimit"):
-            succeed_or_zombie_p_exc(zproc.rlimit, psutil.RLIMIT_NOFILE)
-            succeed_or_zombie_p_exc(zproc.rlimit, psutil.RLIMIT_NOFILE,
-                                    (5, 5))
-        # set methods
-        succeed_or_zombie_p_exc(zproc.parent)
-        if hasattr(zproc, 'cpu_affinity'):
-            try:
-                succeed_or_zombie_p_exc(zproc.cpu_affinity, [0])
-            except ValueError as err:
-                if TRAVIS and LINUX and "not eligible" in str(err):
-                    # https://travis-ci.org/giampaolo/psutil/jobs/279890461
-                    pass
-                else:
-                    raise
-
-        succeed_or_zombie_p_exc(zproc.nice, 0)
-        if hasattr(zproc, 'ionice'):
-            if LINUX:
-                succeed_or_zombie_p_exc(zproc.ionice, 2, 0)
-            else:
-                succeed_or_zombie_p_exc(zproc.ionice, 0)  # Windows
-        if hasattr(zproc, 'rlimit'):
-            succeed_or_zombie_p_exc(zproc.rlimit,
-                                    psutil.RLIMIT_NOFILE, (5, 5))
-        succeed_or_zombie_p_exc(zproc.suspend)
-        succeed_or_zombie_p_exc(zproc.resume)
-        succeed_or_zombie_p_exc(zproc.terminate)
-        succeed_or_zombie_p_exc(zproc.kill)
-
-        # ...its parent should 'see' it
-        # edit: not true on BSD and MACOS
-        # descendants = [x.pid for x in psutil.Process().children(
-        #                recursive=True)]
-        # self.assertIn(zpid, descendants)
-        # XXX should we also assume ppid be usable?  Note: this
-        # would be an important use case as the only way to get
-        # rid of a zombie is to kill its parent.
-        # self.assertEqual(zpid.ppid(), os.getpid())
-        # ...and all other APIs should be able to deal with it
-        self.assertTrue(psutil.pid_exists(zpid))
-        if not TRAVIS and MACOS:
-            # For some reason this started failing all of the sudden.
-            # Maybe they upgraded MACOS version?
-            # https://travis-ci.org/giampaolo/psutil/jobs/310896404
-            self.assertIn(zpid, psutil.pids())
-            self.assertIn(zpid, [x.pid for x in psutil.process_iter()])
-            psutil._pmap = {}
-            self.assertIn(zpid, [x.pid for x in psutil.process_iter()])
+        parent, zombie = self.spawn_zombie()
+        self.assertProcessZombie(zombie)
 
     @unittest.skipIf(not POSIX, 'POSIX only')
     def test_zombie_process_is_running_w_exc(self):
         # Emulate a case where internally is_running() raises
         # ZombieProcess.
         p = psutil.Process()
-        with mock.patch("psutil.Process",
-                        side_effect=psutil.ZombieProcess(0)) as m:
+        with mock.patch(
+            "psutil.Process", side_effect=psutil.ZombieProcess(0)
+        ) as m:
             assert p.is_running()
             assert m.called
 
@@ -1398,101 +1363,136 @@ class TestProcess(unittest.TestCase):
         # Emulate a case where internally status() raises
         # ZombieProcess.
         p = psutil.Process()
-        with mock.patch("psutil._psplatform.Process.status",
-                        side_effect=psutil.ZombieProcess(0)) as m:
+        with mock.patch(
+            "psutil._psplatform.Process.status",
+            side_effect=psutil.ZombieProcess(0),
+        ) as m:
             self.assertEqual(p.status(), psutil.STATUS_ZOMBIE)
             assert m.called
+
+    def test_reused_pid(self):
+        # Emulate a case where PID has been reused by another process.
+        subp = self.spawn_testproc()
+        p = psutil.Process(subp.pid)
+        p._ident = (p.pid, p.create_time() + 100)
+        assert not p.is_running()
+        assert p != psutil.Process(subp.pid)
+        msg = "process no longer exists and its PID has been reused"
+        ns = process_namespace(p)
+        for fun, name in ns.iter(ns.setters + ns.killers, clear_cache=False):
+            with self.subTest(name=name):
+                self.assertRaisesRegex(psutil.NoSuchProcess, msg, fun)
+        self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.ppid)
+        self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.parent)
+        self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.parents)
+        self.assertRaisesRegex(psutil.NoSuchProcess, msg, p.children)
 
     def test_pid_0(self):
         # Process(0) is supposed to work on all platforms except Linux
         if 0 not in psutil.pids():
             self.assertRaises(psutil.NoSuchProcess, psutil.Process, 0)
+            # These 2 are a contradiction, but "ps" says PID 1's parent
+            # is PID 0.
+            assert not psutil.pid_exists(0)
+            self.assertEqual(psutil.Process(1).ppid(), 0)
             return
 
-        # test all methods
         p = psutil.Process(0)
-        for name in psutil._as_dict_attrnames:
-            if name == 'pid':
-                continue
-            meth = getattr(p, name)
+        exc = psutil.AccessDenied if WINDOWS else ValueError
+        self.assertRaises(exc, p.wait)
+        self.assertRaises(exc, p.terminate)
+        self.assertRaises(exc, p.suspend)
+        self.assertRaises(exc, p.resume)
+        self.assertRaises(exc, p.kill)
+        self.assertRaises(exc, p.send_signal, signal.SIGTERM)
+
+        # test all methods
+        ns = process_namespace(p)
+        for fun, name in ns.iter(ns.getters + ns.setters):
             try:
-                ret = meth()
+                ret = fun()
             except psutil.AccessDenied:
                 pass
             else:
                 if name in ("uids", "gids"):
                     self.assertEqual(ret.real, 0)
                 elif name == "username":
-                    if POSIX:
-                        self.assertEqual(p.username(), 'root')
-                    elif WINDOWS:
-                        self.assertEqual(p.username(), 'NT AUTHORITY\\SYSTEM')
+                    user = 'NT AUTHORITY\\SYSTEM' if WINDOWS else 'root'
+                    self.assertEqual(p.username(), user)
                 elif name == "name":
                     assert name, name
 
-        if hasattr(p, 'rlimit'):
-            try:
-                p.rlimit(psutil.RLIMIT_FSIZE)
-            except psutil.AccessDenied:
-                pass
-
-        p.as_dict()
-
         if not OPENBSD:
             self.assertIn(0, psutil.pids())
-            self.assertTrue(psutil.pid_exists(0))
+            assert psutil.pid_exists(0)
 
     @unittest.skipIf(not HAS_ENVIRON, "not supported")
     def test_environ(self):
         def clean_dict(d):
             # Most of these are problematic on Travis.
-            d.pop("PSUTIL_TESTING", None)
             d.pop("PLAT", None)
             d.pop("HOME", None)
             if MACOS:
                 d.pop("__CF_USER_TEXT_ENCODING", None)
                 d.pop("VERSIONER_PYTHON_PREFER_32_BIT", None)
                 d.pop("VERSIONER_PYTHON_VERSION", None)
-            return dict(
-                [(k.replace("\r", "").replace("\n", ""),
-                  v.replace("\r", "").replace("\n", ""))
-                 for k, v in d.items()])
+            return dict([
+                (
+                    k.replace("\r", "").replace("\n", ""),
+                    v.replace("\r", "").replace("\n", ""),
+                )
+                for k, v in d.items()
+            ])
 
         self.maxDiff = None
         p = psutil.Process()
         d1 = clean_dict(p.environ())
         d2 = clean_dict(os.environ.copy())
-        self.assertEqual(d1, d2)
+        if not OSX and GITHUB_ACTIONS:
+            self.assertEqual(d1, d2)
 
     @unittest.skipIf(not HAS_ENVIRON, "not supported")
     @unittest.skipIf(not POSIX, "POSIX only")
+    @unittest.skipIf(
+        MACOS_11PLUS,
+        "macOS 11+ can't get another process environment, issue #2084",
+    )
     def test_weird_environ(self):
         # environment variables can contain values without an equals sign
         code = textwrap.dedent("""
             #include <unistd.h>
             #include <fcntl.h>
+
             char * const argv[] = {"cat", 0};
             char * const envp[] = {"A=1", "X", "C=3", 0};
+
             int main(void) {
-                /* Close stderr on exec so parent can wait for the execve to
-                 * finish. */
+                // Close stderr on exec so parent can wait for the
+                // execve to finish.
                 if (fcntl(2, F_SETFD, FD_CLOEXEC) != 0)
                     return 0;
                 return execve("/bin/cat", argv, envp);
             }
             """)
-        path = TESTFN
-        create_exe(path, c_code=code)
-        self.addCleanup(safe_rmpath, path)
-        sproc = get_test_subprocess([path],
-                                    stdin=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
+        cexe = create_c_exe(self.get_testfn(), c_code=code)
+        sproc = self.spawn_testproc(
+            [cexe], stdin=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         p = psutil.Process(sproc.pid)
         wait_for_pid(p.pid)
-        self.assertTrue(p.is_running())
+        assert p.is_running()
         # Wait for process to exec or exit.
         self.assertEqual(sproc.stderr.read(), b"")
-        self.assertEqual(p.environ(), {"A": "1", "C": "3"})
+        if MACOS and CI_TESTING:
+            try:
+                env = p.environ()
+            except psutil.AccessDenied:
+                # XXX: fails sometimes with:
+                # PermissionError from 'sysctl(KERN_PROCARGS2) -> EIO'
+                return
+        else:
+            env = p.environ()
+        self.assertEqual(env, {"A": "1", "C": "3"})
         sproc.communicate()
         self.assertEqual(sproc.returncode, 0)
 
@@ -1503,18 +1503,20 @@ class TestProcess(unittest.TestCase):
 
 
 if POSIX and os.getuid() == 0:
+
     class LimitedUserTestCase(TestProcess):
         """Repeat the previous tests by using a limited user.
         Executed only on UNIX and only if the user who run the test script
         is root.
         """
+
         # the uid/gid the test suite runs under
         if hasattr(os, 'getuid'):
             PROCESS_UID = os.getuid()
             PROCESS_GID = os.getgid()
 
         def __init__(self, *args, **kwargs):
-            TestProcess.__init__(self, *args, **kwargs)
+            super().__init__(*args, **kwargs)
             # re-define all existent test methods in order to
             # ignore AccessDenied exceptions
             for attr in [x for x in dir(self) if x.startswith('test')]:
@@ -1522,21 +1524,21 @@ if POSIX and os.getuid() == 0:
 
                 def test_(self):
                     try:
-                        meth()
+                        meth()  # noqa
                     except psutil.AccessDenied:
                         pass
+
                 setattr(self, attr, types.MethodType(test_, self))
 
         def setUp(self):
-            safe_rmpath(TESTFN)
-            TestProcess.setUp(self)
+            super().setUp()
             os.setegid(1000)
             os.seteuid(1000)
 
         def tearDown(self):
             os.setegid(self.PROCESS_UID)
             os.seteuid(self.PROCESS_GID)
-            TestProcess.tearDown(self)
+            super().tearDown()
 
         def test_nice(self):
             try:
@@ -1544,10 +1546,10 @@ if POSIX and os.getuid() == 0:
             except psutil.AccessDenied:
                 pass
             else:
-                self.fail("exception not raised")
+                raise self.fail("exception not raised")
 
+        @unittest.skipIf(1, "causes problem as root")
         def test_zombie_process(self):
-            # causes problems if test test suite is run as root
             pass
 
 
@@ -1556,31 +1558,43 @@ if POSIX and os.getuid() == 0:
 # ===================================================================
 
 
-class TestPopen(unittest.TestCase):
+class TestPopen(PsutilTestCase):
     """Tests for psutil.Popen class."""
 
-    def tearDown(self):
+    @classmethod
+    def tearDownClass(cls):
         reap_children()
 
     def test_misc(self):
         # XXX this test causes a ResourceWarning on Python 3 because
-        # psutil.__subproc instance doesn't get propertly freed.
+        # psutil.__subproc instance doesn't get properly freed.
         # Not sure what to do though.
         cmd = [PYTHON_EXE, "-c", "import time; time.sleep(60);"]
-        with psutil.Popen(cmd, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE) as proc:
+        with psutil.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=PYTHON_EXE_ENV,
+        ) as proc:
             proc.name()
             proc.cpu_times()
-            proc.stdin
+            proc.stdin  # noqa
             self.assertTrue(dir(proc))
             self.assertRaises(AttributeError, getattr, proc, 'foo')
             proc.terminate()
+        if POSIX:
+            self.assertEqual(proc.wait(5), -signal.SIGTERM)
+        else:
+            self.assertEqual(proc.wait(5), signal.SIGTERM)
 
     def test_ctx_manager(self):
-        with psutil.Popen([PYTHON_EXE, "-V"],
-                          stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE,
-                          stdin=subprocess.PIPE) as proc:
+        with psutil.Popen(
+            [PYTHON_EXE, "-V"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            env=PYTHON_EXE_ENV,
+        ) as proc:
             proc.communicate()
         assert proc.stdout.closed
         assert proc.stderr.closed
@@ -1592,21 +1606,31 @@ class TestPopen(unittest.TestCase):
         # not raise exception after the process is gone. psutil.Popen
         # diverges from that.
         cmd = [PYTHON_EXE, "-c", "import time; time.sleep(60);"]
-        with psutil.Popen(cmd, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE) as proc:
+        with psutil.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=PYTHON_EXE_ENV,
+        ) as proc:
             proc.terminate()
             proc.wait()
             self.assertRaises(psutil.NoSuchProcess, proc.terminate)
             self.assertRaises(psutil.NoSuchProcess, proc.kill)
-            self.assertRaises(psutil.NoSuchProcess, proc.send_signal,
-                              signal.SIGTERM)
-            if WINDOWS and sys.version_info >= (2, 7):
-                self.assertRaises(psutil.NoSuchProcess, proc.send_signal,
-                                  signal.CTRL_C_EVENT)
-                self.assertRaises(psutil.NoSuchProcess, proc.send_signal,
-                                  signal.CTRL_BREAK_EVENT)
+            self.assertRaises(
+                psutil.NoSuchProcess, proc.send_signal, signal.SIGTERM
+            )
+            if WINDOWS:
+                self.assertRaises(
+                    psutil.NoSuchProcess, proc.send_signal, signal.CTRL_C_EVENT
+                )
+                self.assertRaises(
+                    psutil.NoSuchProcess,
+                    proc.send_signal,
+                    signal.CTRL_BREAK_EVENT,
+                )
 
 
 if __name__ == '__main__':
-    from psutil.tests.runner import run
-    run(__file__)
+    from psutil.tests.runner import run_from_name
+
+    run_from_name(__file__)

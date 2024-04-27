@@ -8,48 +8,30 @@ import contextlib
 import errno
 import functools
 import os
+import signal
 import sys
 import time
 from collections import namedtuple
 
 from . import _common
-try:
-    from . import _psutil_windows as cext
-except ImportError as err:
-    if str(err).lower().startswith("dll load failed") and \
-            sys.getwindowsversion()[0] < 6:
-        # We may get here if:
-        # 1) we are on an old Windows version
-        # 2) psutil was installed via pip + wheel
-        # See: https://github.com/giampaolo/psutil/issues/811
-        # It must be noted that psutil can still (kind of) work
-        # on outdated systems if compiled / installed from sources,
-        # but if we get here it means this this was a wheel (or exe).
-        msg = "this Windows version is too old (< Windows Vista); "
-        msg += "psutil 3.4.2 is the latest version which supports Windows "
-        msg += "2000, XP and 2003 server; it may be possible that psutil "
-        msg += "will work if compiled from sources though"
-        raise RuntimeError(msg)
-    else:
-        raise
-
-from ._common import conn_tmap
 from ._common import ENCODING
 from ._common import ENCODING_ERRS
+from ._common import AccessDenied
+from ._common import NoSuchProcess
+from ._common import TimeoutExpired
+from ._common import conn_tmap
+from ._common import conn_to_ntuple
+from ._common import debug
 from ._common import isfile_strict
+from ._common import memoize
 from ._common import memoize_when_activated
 from ._common import parse_environ_block
-from ._common import sockfam_to_enum
-from ._common import socktype_to_enum
 from ._common import usage_percent
+from ._compat import PY3
 from ._compat import long
 from ._compat import lru_cache
-from ._compat import PY3
+from ._compat import range
 from ._compat import unicode
-from ._compat import xrange
-from ._exceptions import AccessDenied
-from ._exceptions import NoSuchProcess
-from ._exceptions import TimeoutExpired
 from ._psutil_windows import ABOVE_NORMAL_PRIORITY_CLASS
 from ._psutil_windows import BELOW_NORMAL_PRIORITY_CLASS
 from ._psutil_windows import HIGH_PRIORITY_CLASS
@@ -57,21 +39,45 @@ from ._psutil_windows import IDLE_PRIORITY_CLASS
 from ._psutil_windows import NORMAL_PRIORITY_CLASS
 from ._psutil_windows import REALTIME_PRIORITY_CLASS
 
-if sys.version_info >= (3, 4):
+
+try:
+    from . import _psutil_windows as cext
+except ImportError as err:
+    if (
+        str(err).lower().startswith("dll load failed")
+        and sys.getwindowsversion()[0] < 6
+    ):
+        # We may get here if:
+        # 1) we are on an old Windows version
+        # 2) psutil was installed via pip + wheel
+        # See: https://github.com/giampaolo/psutil/issues/811
+        msg = "this Windows version is too old (< Windows Vista); "
+        msg += "psutil 3.4.2 is the latest version which supports Windows "
+        msg += "2000, XP and 2003 server"
+        raise RuntimeError(msg)
+    else:
+        raise
+
+if PY3:
     import enum
 else:
     enum = None
 
 # process priority constants, import from __init__.py:
 # http://msdn.microsoft.com/en-us/library/ms686219(v=vs.85).aspx
+# fmt: off
 __extra__all__ = [
     "win_service_iter", "win_service_get",
+    # Process priority
     "ABOVE_NORMAL_PRIORITY_CLASS", "BELOW_NORMAL_PRIORITY_CLASS",
-    "HIGH_PRIORITY_CLASS", "IDLE_PRIORITY_CLASS",
-    "NORMAL_PRIORITY_CLASS", "REALTIME_PRIORITY_CLASS",
-    "CONN_DELETE_TCB",
-    "AF_LINK",
+    "HIGH_PRIORITY_CLASS", "IDLE_PRIORITY_CLASS", "NORMAL_PRIORITY_CLASS",
+    "REALTIME_PRIORITY_CLASS",
+    # IO priority
+    "IOPRIO_VERYLOW", "IOPRIO_LOW", "IOPRIO_NORMAL", "IOPRIO_HIGH",
+    # others
+    "CONN_DELETE_TCB", "AF_LINK",
 ]
+# fmt: on
 
 
 # =====================================================================
@@ -79,11 +85,8 @@ __extra__all__ = [
 # =====================================================================
 
 CONN_DELETE_TCB = "DELETE_TCB"
-ACCESS_DENIED_ERRSET = frozenset([errno.EPERM, errno.EACCES,
-                                  cext.ERROR_ACCESS_DENIED])
-NO_SUCH_SERVICE_ERRSET = frozenset([cext.ERROR_INVALID_NAME,
-                                    cext.ERROR_SERVICE_DOES_NOT_EXIST])
-
+ERROR_PARTIAL_COPY = 299
+PYPY = '__pypy__' in sys.builtin_module_names
 
 if enum is None:
     AF_LINK = -1
@@ -108,6 +111,7 @@ TCP_STATUSES = {
 }
 
 if enum is not None:
+
     class Priority(enum.IntEnum):
         ABOVE_NORMAL_PRIORITY_CLASS = ABOVE_NORMAL_PRIORITY_CLASS
         BELOW_NORMAL_PRIORITY_CLASS = BELOW_NORMAL_PRIORITY_CLASS
@@ -117,6 +121,21 @@ if enum is not None:
         REALTIME_PRIORITY_CLASS = REALTIME_PRIORITY_CLASS
 
     globals().update(Priority.__members__)
+
+if enum is None:
+    IOPRIO_VERYLOW = 0
+    IOPRIO_LOW = 1
+    IOPRIO_NORMAL = 2
+    IOPRIO_HIGH = 3
+else:
+
+    class IOPriority(enum.IntEnum):
+        IOPRIO_VERYLOW = 0
+        IOPRIO_LOW = 1
+        IOPRIO_NORMAL = 2
+        IOPRIO_HIGH = 3
+
+    globals().update(IOPriority.__members__)
 
 pinfo_map = dict(
     num_handles=0,
@@ -149,6 +168,7 @@ pinfo_map = dict(
 # =====================================================================
 
 
+# fmt: off
 # psutil.cpu_times()
 scputimes = namedtuple('scputimes',
                        ['user', 'system', 'idle', 'interrupt', 'dpc'])
@@ -171,6 +191,7 @@ pmmap_ext = namedtuple(
 pio = namedtuple('pio', ['read_count', 'write_count',
                          'read_bytes', 'write_bytes',
                          'other_count', 'other_bytes'])
+# fmt: on
 
 
 # =====================================================================
@@ -183,11 +204,12 @@ def convert_dos_path(s):
     r"""Convert paths using native DOS format like:
         "\Device\HarddiskVolume1\Windows\systemew\file.txt"
     into:
-        "C:\Windows\systemew\file.txt"
+        "C:\Windows\systemew\file.txt".
     """
     rawdrive = '\\'.join(s.split('\\')[:3])
-    driveletter = cext.win32_QueryDosDevice(rawdrive)
-    return os.path.join(driveletter, s[len(rawdrive):])
+    driveletter = cext.QueryDosDevice(rawdrive)
+    remainder = s[len(rawdrive) :]
+    return os.path.join(driveletter, remainder)
 
 
 def py2_strencode(s):
@@ -203,6 +225,11 @@ def py2_strencode(s):
             return s.encode(ENCODING, ENCODING_ERRS)
 
 
+@memoize
+def getpagesize():
+    return cext.getpagesize()
+
+
 # =====================================================================
 # --- memory
 # =====================================================================
@@ -211,7 +238,7 @@ def py2_strencode(s):
 def virtual_memory():
     """System virtual memory as a namedtuple."""
     mem = cext.virtual_mem()
-    totphys, availphys, totpagef, availpagef, totvirt, freevirt = mem
+    totphys, availphys, totsys, availsys = mem
     #
     total = totphys
     avail = availphys
@@ -224,10 +251,26 @@ def virtual_memory():
 def swap_memory():
     """Swap system memory as a (total, used, free, sin, sout) tuple."""
     mem = cext.virtual_mem()
-    total = mem[2]
-    free = mem[3]
-    used = total - free
-    percent = usage_percent(used, total, round_=1)
+
+    total_phys = mem[0]
+    total_system = mem[2]
+
+    # system memory (commit total/limit) is the sum of physical and swap
+    # thus physical memory values need to be subtracted to get swap values
+    total = total_system - total_phys
+    # commit total is incremented immediately (decrementing free_system)
+    # while the corresponding free physical value is not decremented until
+    # pages are accessed, so we can't use free system memory for swap.
+    # instead, we calculate page file usage based on performance counter
+    if total > 0:
+        percentswap = cext.swap_percent()
+        used = int(0.01 * percentswap * total)
+    else:
+        percentswap = 0.0
+        used = 0
+
+    free = total - used
+    percent = round(percentswap, 1)
     return _common.sswap(total, used, free, percent, 0, 0)
 
 
@@ -269,8 +312,9 @@ def cpu_times():
     # interrupt and dpc times. cext.per_cpu_times() does, so we
     # rely on it to get those only.
     percpu_summed = scputimes(*[sum(n) for n in zip(*cext.per_cpu_times())])
-    return scputimes(user, system, idle,
-                     percpu_summed.interrupt, percpu_summed.dpc)
+    return scputimes(
+        user, system, idle, percpu_summed.interrupt, percpu_summed.dpc
+    )
 
 
 def per_cpu_times():
@@ -287,17 +331,18 @@ def cpu_count_logical():
     return cext.cpu_count_logical()
 
 
-def cpu_count_physical():
-    """Return the number of physical CPU cores in the system."""
-    return cext.cpu_count_phys()
+def cpu_count_cores():
+    """Return the number of CPU cores in the system."""
+    return cext.cpu_count_cores()
 
 
 def cpu_stats():
     """Return CPU statistics."""
     ctx_switches, interrupts, dpcs, syscalls = cext.cpu_stats()
     soft_interrupts = 0
-    return _common.scpustats(ctx_switches, interrupts, soft_interrupts,
-                             syscalls)
+    return _common.scpustats(
+        ctx_switches, interrupts, soft_interrupts, syscalls
+    )
 
 
 def cpu_freq():
@@ -307,6 +352,24 @@ def cpu_freq():
     curr, max_ = cext.cpu_freq()
     min_ = 0.0
     return [_common.scpufreq(float(curr), min_, float(max_))]
+
+
+_loadavg_inititialized = False
+
+
+def getloadavg():
+    """Return the number of processes in the system run queue averaged
+    over the last 1, 5, and 15 minutes respectively as a tuple.
+    """
+    global _loadavg_inititialized
+
+    if not _loadavg_inititialized:
+        cext.init_loadavg_counter()
+        _loadavg_inititialized = True
+
+    # Drop to 2 decimal points which is what Linux does
+    raw_loads = cext.getloadavg()
+    return tuple([round(load, 2) for load in raw_loads])
 
 
 # =====================================================================
@@ -319,24 +382,25 @@ def net_connections(kind, _pid=-1):
     connections (as opposed to connections opened by one process only).
     """
     if kind not in conn_tmap:
-        raise ValueError("invalid %r kind argument; choose between %s"
-                         % (kind, ', '.join([repr(x) for x in conn_tmap])))
+        raise ValueError(
+            "invalid %r kind argument; choose between %s"
+            % (kind, ', '.join([repr(x) for x in conn_tmap]))
+        )
     families, types = conn_tmap[kind]
     rawlist = cext.net_connections(_pid, families, types)
     ret = set()
     for item in rawlist:
         fd, fam, type, laddr, raddr, status, pid = item
-        if laddr:
-            laddr = _common.addr(*laddr)
-        if raddr:
-            raddr = _common.addr(*raddr)
-        status = TCP_STATUSES[status]
-        fam = sockfam_to_enum(fam)
-        type = socktype_to_enum(type)
-        if _pid == -1:
-            nt = _common.sconn(fd, fam, type, laddr, raddr, status, pid)
-        else:
-            nt = _common.pconn(fd, fam, type, laddr, raddr, status)
+        nt = conn_to_ntuple(
+            fd,
+            fam,
+            type,
+            laddr,
+            raddr,
+            status,
+            TCP_STATUSES,
+            pid=pid if _pid == -1 else None,
+        )
         ret.add(nt)
     return list(ret)
 
@@ -352,7 +416,7 @@ def net_if_stats():
         isup, duplex, speed, mtu = items
         if hasattr(_common, 'NicDuplex'):
             duplex = _common.NicDuplex(duplex)
-        ret[name] = _common.snicstats(isup, duplex, speed, mtu)
+        ret[name] = _common.snicstats(isup, duplex, speed, mtu, '')
     return ret
 
 
@@ -451,7 +515,7 @@ def win_service_get(name):
     return service
 
 
-class WindowsService(object):
+class WindowsService:
     """Represents an installed Windows service."""
 
     def __init__(self, name, display_name):
@@ -460,7 +524,9 @@ class WindowsService(object):
 
     def __str__(self):
         details = "(name=%r, display_name=%r)" % (
-            self._name, self._display_name)
+            self._name,
+            self._display_name,
+        )
         return "%s%s" % (self.__class__.__name__, details)
 
     def __repr__(self):
@@ -478,14 +544,16 @@ class WindowsService(object):
 
     def _query_config(self):
         with self._wrap_exceptions():
-            display_name, binpath, username, start_type = \
+            display_name, binpath, username, start_type = (
                 cext.winservice_query_config(self._name)
+            )
         # XXX - update _self.display_name?
         return dict(
             display_name=py2_strencode(display_name),
             binpath=py2_strencode(binpath),
             username=py2_strencode(username),
-            start_type=py2_strencode(start_type))
+            start_type=py2_strencode(start_type),
+        )
 
     def _query_status(self):
         with self._wrap_exceptions():
@@ -501,17 +569,19 @@ class WindowsService(object):
         """
         try:
             yield
-        except WindowsError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                raise AccessDenied(
-                    pid=None, name=self._name,
-                    msg="service %r is not querable (not enough privileges)" %
-                        self._name)
-            elif err.errno in NO_SUCH_SERVICE_ERRSET or \
-                    err.winerror in NO_SUCH_SERVICE_ERRSET:
-                raise NoSuchProcess(
-                    pid=None, name=self._name,
-                    msg="service %r does not exist)" % self._name)
+        except OSError as err:
+            if is_permission_err(err):
+                msg = (
+                    "service %r is not querable (not enough privileges)"
+                    % self._name
+                )
+                raise AccessDenied(pid=None, name=self._name, msg=msg)
+            elif err.winerror in (
+                cext.ERROR_INVALID_NAME,
+                cext.ERROR_SERVICE_DOES_NOT_EXIST,
+            ):
+                msg = "service %r does not exist" % self._name
+                raise NoSuchProcess(pid=None, name=self._name, msg=msg)
             else:
                 raise
 
@@ -625,27 +695,77 @@ pid_exists = cext.pid_exists
 ppid_map = cext.ppid_map  # used internally by Process.children()
 
 
+def is_permission_err(exc):
+    """Return True if this is a permission error."""
+    assert isinstance(exc, OSError), exc
+    if exc.errno in (errno.EPERM, errno.EACCES):
+        return True
+    # On Python 2 OSError doesn't always have 'winerror'. Sometimes
+    # it does, in which case the original exception was WindowsError
+    # (which is a subclass of OSError).
+    if getattr(exc, "winerror", -1) in (
+        cext.ERROR_ACCESS_DENIED,
+        cext.ERROR_PRIVILEGE_NOT_HELD,
+    ):
+        return True
+    return False
+
+
+def convert_oserror(exc, pid=None, name=None):
+    """Convert OSError into NoSuchProcess or AccessDenied."""
+    assert isinstance(exc, OSError), exc
+    if is_permission_err(exc):
+        return AccessDenied(pid=pid, name=name)
+    if exc.errno == errno.ESRCH:
+        return NoSuchProcess(pid=pid, name=name)
+    raise exc
+
+
 def wrap_exceptions(fun):
-    """Decorator which translates bare OSError and WindowsError
-    exceptions into NoSuchProcess and AccessDenied.
-    """
+    """Decorator which converts OSError into NoSuchProcess or AccessDenied."""
+
     @functools.wraps(fun)
     def wrapper(self, *args, **kwargs):
         try:
             return fun(self, *args, **kwargs)
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                raise AccessDenied(self.pid, self._name)
-            if err.errno == errno.ESRCH:
-                raise NoSuchProcess(self.pid, self._name)
-            raise
+            raise convert_oserror(err, pid=self.pid, name=self._name)
+
     return wrapper
 
 
-class Process(object):
+def retry_error_partial_copy(fun):
+    """Workaround for https://github.com/giampaolo/psutil/issues/875.
+    See: https://stackoverflow.com/questions/4457745#4457745.
+    """
+
+    @functools.wraps(fun)
+    def wrapper(self, *args, **kwargs):
+        delay = 0.0001
+        times = 33
+        for _ in range(times):  # retries for roughly 1 second
+            try:
+                return fun(self, *args, **kwargs)
+            except WindowsError as _:
+                err = _
+                if err.winerror == ERROR_PARTIAL_COPY:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 0.04)
+                    continue
+                raise
+        msg = (
+            "{} retried {} times, converted to AccessDenied as it's still"
+            "returning {}".format(fun, times, err)
+        )
+        raise AccessDenied(pid=self.pid, name=self._name, msg=msg)
+
+    return wrapper
+
+
+class Process:
     """Wrapper class around underlying C implementation."""
 
-    __slots__ = ["pid", "_name", "_ppid"]
+    __slots__ = ["pid", "_name", "_ppid", "_cache"]
 
     def __init__(self, pid):
         self.pid = pid
@@ -655,13 +775,15 @@ class Process(object):
     # --- oneshot() stuff
 
     def oneshot_enter(self):
-        self.oneshot_info.cache_activate()
+        self._proc_info.cache_activate(self)
+        self.exe.cache_activate(self)
 
     def oneshot_exit(self):
-        self.oneshot_info.cache_deactivate()
+        self._proc_info.cache_deactivate(self)
+        self.exe.cache_deactivate(self)
 
     @memoize_when_activated
-    def oneshot_info(self):
+    def _proc_info(self):
         """Return multiple information about this process as a
         raw tuple.
         """
@@ -669,7 +791,6 @@ class Process(object):
         assert len(ret) == len(pinfo_map)
         return ret
 
-    @wrap_exceptions
     def name(self):
         """Return process name, which on Windows is always the final
         part of the executable.
@@ -678,37 +799,53 @@ class Process(object):
         # and process-hacker.
         if self.pid == 0:
             return "System Idle Process"
-        elif self.pid == 4:
+        if self.pid == 4:
             return "System"
-        else:
-            try:
-                # Note: this will fail with AD for most PIDs owned
-                # by another user but it's faster.
-                return py2_strencode(os.path.basename(self.exe()))
-            except AccessDenied:
-                return py2_strencode(cext.proc_name(self.pid))
+        return os.path.basename(self.exe())
 
     @wrap_exceptions
+    @memoize_when_activated
     def exe(self):
-        # Note: os.path.exists(path) may return False even if the file
-        # is there, see:
-        # http://stackoverflow.com/questions/3112546/os-path-exists-lies
-
-        # see https://github.com/giampaolo/psutil/issues/414
-        # see https://github.com/giampaolo/psutil/issues/528
-        if self.pid in (0, 4):
-            raise AccessDenied(self.pid, self._name)
-        return py2_strencode(convert_dos_path(cext.proc_exe(self.pid)))
+        if PYPY:
+            try:
+                exe = cext.proc_exe(self.pid)
+            except WindowsError as err:
+                # 24 = ERROR_TOO_MANY_OPEN_FILES. Not sure why this happens
+                # (perhaps PyPy's JIT delaying garbage collection of files?).
+                if err.errno == 24:
+                    debug("%r translated into AccessDenied" % err)
+                    raise AccessDenied(self.pid, self._name)
+                raise
+        else:
+            exe = cext.proc_exe(self.pid)
+        if not PY3:
+            exe = py2_strencode(exe)
+        if exe.startswith('\\'):
+            return convert_dos_path(exe)
+        return exe  # May be "Registry", "MemCompression", ...
 
     @wrap_exceptions
+    @retry_error_partial_copy
     def cmdline(self):
-        ret = cext.proc_cmdline(self.pid)
+        if cext.WINVER >= cext.WINDOWS_8_1:
+            # PEB method detects cmdline changes but requires more
+            # privileges: https://github.com/giampaolo/psutil/pull/1398
+            try:
+                ret = cext.proc_cmdline(self.pid, use_peb=True)
+            except OSError as err:
+                if is_permission_err(err):
+                    ret = cext.proc_cmdline(self.pid, use_peb=False)
+                else:
+                    raise
+        else:
+            ret = cext.proc_cmdline(self.pid, use_peb=True)
         if PY3:
             return ret
         else:
             return [py2_strencode(s) for s in ret]
 
     @wrap_exceptions
+    @retry_error_partial_copy
     def environ(self):
         ustr = cext.proc_environ(self.pid)
         if ustr and not PY3:
@@ -725,10 +862,10 @@ class Process(object):
         try:
             return cext.proc_memory_info(self.pid)
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
+            if is_permission_err(err):
                 # TODO: the C ext can probably be refactored in order
                 # to get this from cext.proc_info()
-                info = self.oneshot_info()
+                info = self._proc_info()
                 return (
                     info[pinfo_map['num_page_faults']],
                     info[pinfo_map['peak_wset']],
@@ -751,13 +888,14 @@ class Process(object):
         t = self._get_raw_meminfo()
         rss = t[2]  # wset
         vms = t[7]  # pagefile
-        return pmem(*(rss, vms, ) + t)
+        return pmem(*(rss, vms) + t)
 
     @wrap_exceptions
     def memory_full_info(self):
         basic_mem = self.memory_info()
         uss = cext.proc_memory_uss(self.pid)
-        return pfullmem(*basic_mem + (uss, ))
+        uss *= getpagesize()
+        return pfullmem(*basic_mem + (uss,))
 
     def memory_maps(self):
         try:
@@ -765,16 +903,11 @@ class Process(object):
         except OSError as err:
             # XXX - can't use wrap_exceptions decorator as we're
             # returning a generator; probably needs refactoring.
-            if err.errno in ACCESS_DENIED_ERRSET:
-                raise AccessDenied(self.pid, self._name)
-            if err.errno == errno.ESRCH:
-                raise NoSuchProcess(self.pid, self._name)
-            raise
+            raise convert_oserror(err, self.pid, self._name)
         else:
             for addr, perm, path, rss in raw:
                 path = convert_dos_path(path)
                 if not PY3:
-                    assert isinstance(path, unicode), type(path)
                     path = py2_strencode(path)
                 addr = hex(addr)
                 yield (addr, perm, path, rss)
@@ -785,7 +918,20 @@ class Process(object):
 
     @wrap_exceptions
     def send_signal(self, sig):
-        os.kill(self.pid, sig)
+        if sig == signal.SIGTERM:
+            cext.proc_kill(self.pid)
+        # py >= 2.7
+        elif sig in (
+            getattr(signal, "CTRL_C_EVENT", object()),
+            getattr(signal, "CTRL_BREAK_EVENT", object()),
+        ):
+            os.kill(self.pid, sig)
+        else:
+            msg = (
+                "only SIGTERM, CTRL_C_EVENT and CTRL_BREAK_EVENT signals "
+                "are supported on Windows"
+            )
+            raise ValueError(msg)
 
     @wrap_exceptions
     def wait(self, timeout=None):
@@ -839,19 +985,19 @@ class Process(object):
 
     @wrap_exceptions
     def create_time(self):
-        # special case for kernel process PIDs; return system boot time
-        if self.pid in (0, 4):
-            return boot_time()
+        # Note: proc_times() not put under oneshot() 'cause create_time()
+        # is already cached by the main Process class.
         try:
-            return cext.proc_create_time(self.pid)
+            user, system, created = cext.proc_times(self.pid)
+            return created
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                return self.oneshot_info()[pinfo_map['create_time']]
+            if is_permission_err(err):
+                return self._proc_info()[pinfo_map['create_time']]
             raise
 
     @wrap_exceptions
     def num_threads(self):
-        return self.oneshot_info()[pinfo_map['num_threads']]
+        return self._proc_info()[pinfo_map['num_threads']]
 
     @wrap_exceptions
     def threads(self):
@@ -865,26 +1011,26 @@ class Process(object):
     @wrap_exceptions
     def cpu_times(self):
         try:
-            user, system = cext.proc_cpu_times(self.pid)
+            user, system, created = cext.proc_times(self.pid)
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                info = self.oneshot_info()
-                user = info[pinfo_map['user_time']]
-                system = info[pinfo_map['kernel_time']]
-            else:
+            if not is_permission_err(err):
                 raise
+            info = self._proc_info()
+            user = info[pinfo_map['user_time']]
+            system = info[pinfo_map['kernel_time']]
         # Children user/system times are not retrievable (set to 0).
         return _common.pcputimes(user, system, 0.0, 0.0)
 
     @wrap_exceptions
     def suspend(self):
-        return cext.proc_suspend(self.pid)
+        cext.proc_suspend_or_resume(self.pid, True)
 
     @wrap_exceptions
     def resume(self):
-        return cext.proc_resume(self.pid)
+        cext.proc_suspend_or_resume(self.pid, False)
 
     @wrap_exceptions
+    @retry_error_partial_copy
     def cwd(self):
         if self.pid in (0, 4):
             raise AccessDenied(self.pid, self._name)
@@ -927,39 +1073,43 @@ class Process(object):
     def nice_set(self, value):
         return cext.proc_priority_set(self.pid, value)
 
-    # available on Windows >= Vista
-    if hasattr(cext, "proc_io_priority_get"):
-        @wrap_exceptions
-        def ionice_get(self):
-            return cext.proc_io_priority_get(self.pid)
+    @wrap_exceptions
+    def ionice_get(self):
+        ret = cext.proc_io_priority_get(self.pid)
+        if enum is not None:
+            ret = IOPriority(ret)
+        return ret
 
-        @wrap_exceptions
-        def ionice_set(self, value, _):
-            if _:
-                raise TypeError("set_proc_ionice() on Windows takes only "
-                                "1 argument (2 given)")
-            if value not in (2, 1, 0):
-                raise ValueError("value must be 2 (normal), 1 (low) or 0 "
-                                 "(very low); got %r" % value)
-            return cext.proc_io_priority_set(self.pid, value)
+    @wrap_exceptions
+    def ionice_set(self, ioclass, value):
+        if value:
+            msg = "value argument not accepted on Windows"
+            raise TypeError(msg)
+        if ioclass not in (
+            IOPRIO_VERYLOW,
+            IOPRIO_LOW,
+            IOPRIO_NORMAL,
+            IOPRIO_HIGH,
+        ):
+            raise ValueError("%s is not a valid priority" % ioclass)
+        cext.proc_io_priority_set(self.pid, ioclass)
 
     @wrap_exceptions
     def io_counters(self):
         try:
             ret = cext.proc_io_counters(self.pid)
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                info = self.oneshot_info()
-                ret = (
-                    info[pinfo_map['io_rcount']],
-                    info[pinfo_map['io_wcount']],
-                    info[pinfo_map['io_rbytes']],
-                    info[pinfo_map['io_wbytes']],
-                    info[pinfo_map['io_count_others']],
-                    info[pinfo_map['io_bytes_others']],
-                )
-            else:
+            if not is_permission_err(err):
                 raise
+            info = self._proc_info()
+            ret = (
+                info[pinfo_map['io_rcount']],
+                info[pinfo_map['io_wcount']],
+                info[pinfo_map['io_rbytes']],
+                info[pinfo_map['io_wbytes']],
+                info[pinfo_map['io_count_others']],
+                info[pinfo_map['io_bytes_others']],
+            )
         return pio(*ret)
 
     @wrap_exceptions
@@ -973,18 +1123,19 @@ class Process(object):
     @wrap_exceptions
     def cpu_affinity_get(self):
         def from_bitmask(x):
-            return [i for i in xrange(64) if (1 << i) & x]
+            return [i for i in range(64) if (1 << i) & x]
+
         bitmask = cext.proc_cpu_affinity_get(self.pid)
         return from_bitmask(bitmask)
 
     @wrap_exceptions
     def cpu_affinity_set(self, value):
-        def to_bitmask(l):
-            if not l:
-                raise ValueError("invalid argument %r" % l)
+        def to_bitmask(ls):
+            if not ls:
+                raise ValueError("invalid argument %r" % ls)
             out = 0
-            for b in l:
-                out |= 2 ** b
+            for b in ls:
+                out |= 2**b
             return out
 
         # SetProcessAffinityMask() states that ERROR_INVALID_PARAMETER
@@ -995,7 +1146,8 @@ class Process(object):
             if cpu not in allcpus:
                 if not isinstance(cpu, (int, long)):
                     raise TypeError(
-                        "invalid CPU %r; an integer is required" % cpu)
+                        "invalid CPU %r; an integer is required" % cpu
+                    )
                 else:
                     raise ValueError("invalid CPU %r" % cpu)
 
@@ -1007,12 +1159,12 @@ class Process(object):
         try:
             return cext.proc_num_handles(self.pid)
         except OSError as err:
-            if err.errno in ACCESS_DENIED_ERRSET:
-                return self.oneshot_info()[pinfo_map['num_handles']]
+            if is_permission_err(err):
+                return self._proc_info()[pinfo_map['num_handles']]
             raise
 
     @wrap_exceptions
     def num_ctx_switches(self):
-        ctx_switches = self.oneshot_info()[pinfo_map['ctx_switches']]
+        ctx_switches = self._proc_info()[pinfo_map['ctx_switches']]
         # only voluntary ctx switches are supported
         return _common.pctxsw(ctx_switches, 0)

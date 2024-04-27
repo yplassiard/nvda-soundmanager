@@ -19,7 +19,7 @@ addon_info = {
 	# Translators: Long description to be shown for this add-on on add-on information from add-ons manager
     "addon_description" : _("""Manages Windows and applications volumes directly within NVDA"""),
 	# version
-	"addon_version" : "2023.07.26",
+	"addon_version" : "2024.04.26",
 	# Author(s)
 	"addon_author" : u"Yannick PLASSIARD <podcastcecitek@gmail.com>, Danstiv <danstiv@blind.games>, Beqa Gozalishvili <beqaprogger@gmail.com>",
 	# URL for the add-on documentation support
@@ -27,9 +27,9 @@ addon_info = {
 	# Documentation file name
 	"addon_docFileName" : "readme.html",
 	# Minimum NVDA version supported (e.g. "2018.3")
-	"addon_minimumNVDAVersion" : "2019.1",
+	"addon_minimumNVDAVersion" : "2024.1",
 	# Last NVDA version supported/tested (e.g. "2018.4", ideally more recent than minimum version)
-	"addon_lastTestedNVDAVersion" : "2023.1",
+	"addon_lastTestedNVDAVersion" : "2024.4",
 	# Add-on update channel (default is stable or None)
 	"addon_updateChannel" : "stable"
 }
